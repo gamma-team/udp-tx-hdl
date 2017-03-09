@@ -333,8 +333,86 @@ BEGIN
     BEGIN
         IF rising_edge(Clk) THEN
             IF Rst = '1' THEN
-                shift_ram_d <= (OTHERS => '0');
-                shift_ram_q <= (OTHERS => '0');
+                p0_data_in <= (OTHERS => (OTHERS => '0'));
+                p0_data_in_valid <= (OTHERS => '0');
+                p0_data_in_start <= '0';
+                p0_data_in_end <= '0';
+                p0_data_in_err <= '0';
+                p0_addr_src_valid <= false;
+                p0_addr_dst_valid <= false;
+                p0_udp_port_src_valid <= false;
+                p0_udp_port_dst_valid <= false;
+                p0_addr_src <= (OTHERS => '0');
+                p0_addr_dst <= (OTHERS => '0');
+                p0_udp_port_src <= (OTHERS => '0');
+                p0_udp_port_dst <= (OTHERS => '0');
+
+                p1_data_in <= (OTHERS => (OTHERS => '0'));
+                p1_data_in_valid <= (OTHERS => '0');
+                p1_data_in_start <= '0';
+                p1_data_in_end <= '0';
+                p1_data_in_err <= '0';
+                p1_addr_src <= (OTHERS => '0');
+                p1_addr_dst <= (OTHERS => '0');
+                p1_udp_port_src <= (OTHERS => '0');
+                p1_udp_port_dst <= (OTHERS => '0');
+                p1_udp_len <= (OTHERS => '0');
+                p1_chk_accum <= (OTHERS => '0');
+
+                p2_data_in <= (OTHERS => (OTHERS => '0'));
+                p2_data_in_valid <= (OTHERS => '0');
+                p2_data_in_start <= '0';
+                p2_data_in_end <= '0';
+                p2_data_in_err <= '0';
+                p2_addr_src <= (OTHERS => '0');
+                p2_addr_dst <= (OTHERS => '0');
+                p2_udp_port_src <= (OTHERS => '0');
+                p2_udp_port_dst <= (OTHERS => '0');
+                p2_udp_len <= (OTHERS => '0');
+                p2_chk_accum <= (OTHERS => '0');
+                p2_chk_addend <= (OTHERS => '0');
+                p2_internal_off <= (OTHERS => '0');
+
+                p3_data_in <= (OTHERS => (OTHERS => '0'));
+                p3_data_in_valid <= (OTHERS => '0');
+                p3_data_in_start <= '0';
+                p3_data_in_end <= '0';
+                p3_data_in_err <= '0';
+                p3_addr_src <= (OTHERS => '0');
+                p3_addr_dst <= (OTHERS => '0');
+                p3_udp_port_src <= (OTHERS => '0');
+                p3_udp_port_dst <= (OTHERS => '0');
+                p3_udp_len <= (OTHERS => '0');
+                p3_udp_chk <= (OTHERS => '0');
+
+                p4_data_out <= (OTHERS => (OTHERS => '0'));
+                p4_data_out_valid <= (OTHERS => false);
+                p4_data_out_start <= '0';
+                p4_data_out_end <= '0';
+                p4_data_out_err <= '0';
+                p4_addr_src <= (OTHERS => '0');
+                p4_addr_dst <= (OTHERS => '0');
+                p4_udp_port_src <= (OTHERS => '0');
+                p4_udp_port_dst <= (OTHERS => '0');
+                p4_udp_len <= (OTHERS => '0');
+                p4_udp_chk <= (OTHERS => '0');
+                p4_fifo_hdr_write <= '0';
+
+                p5_data_out <= (OTHERS => (OTHERS => '0'));
+                p5_data_out_valid <= (OTHERS => false);
+                p5_data_out_start <= '0';
+                p5_data_out_end <= '0';
+                p5_data_out_err <= '0';
+                p5_data_buf <= (OTHERS => (OTHERS => '0'));
+                p5_data_buf_valid <= (OTHERS => false);
+                p5_data_buf_start <= '0';
+                p5_data_buf_end <= '0';
+
+                p6_data_out <= (OTHERS => (OTHERS => '0'));
+                p6_data_out_start <= '0';
+                p6_data_out_end <= '0';
+                p6_data_out_err <= '0';
+                p6_shift_ena <= '0';
             ELSE
                 --
                 -- Stage 0: Byte decoding
