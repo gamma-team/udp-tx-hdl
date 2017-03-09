@@ -165,7 +165,6 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL p0_addr_dst : STD_LOGIC_VECTOR(31 DOWNTO 0);
     SIGNAL p0_udp_port_src : STD_LOGIC_VECTOR(15 DOWNTO 0);
     SIGNAL p0_udp_port_dst : STD_LOGIC_VECTOR(15 DOWNTO 0);
-    SIGNAL p0_proto_valid : BOOLEAN;
 
     SIGNAL p1_data_in : DATA_BUS;
     SIGNAL p1_data_in_valid
@@ -354,7 +353,6 @@ BEGIN
                 p0_addr_dst_valid <= false;
                 p0_udp_port_src_valid <= false;
                 p0_udp_port_dst_valid <= false;
-                p0_proto_valid <= false;
                 FOR i IN 0 TO width - 1 LOOP
                     IF Data_in_valid(i) = '1' THEN
                         -- This case statement is quite large, could be split
