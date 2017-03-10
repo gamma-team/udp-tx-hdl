@@ -58,8 +58,8 @@ BEGIN
                 shift_reg_regs <= (OTHERS => (OTHERS => '0'));
             ELSIF Ena = '1' THEN
                 shift_reg_regs(1) <= D;
-                FOR i IN 1 TO shift_reg_regs'length LOOP
-                        shift_reg_regs(i) <= shift_reg_regs(i - 1);
+                FOR i IN INTEGER RANGE 1 TO shift_reg_regs'length - 1 LOOP
+                        shift_reg_regs(i + 1) <= shift_reg_regs(i);
                 END LOOP;
             END IF;
         END IF;
