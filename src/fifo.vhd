@@ -52,58 +52,85 @@ ENTITY fifo IS
     );
 END ENTITY;
 
-ARCHITECTURE fast_peek OF fifo IS
-    TYPE T_MEM IS ARRAY (0 TO DEPTH - 1)
+-- 1 cycle delay until Full updates after a Read or Write assertion
+-- 2 cycle delay until Empty updates after a Read or Write assertion
+-- 2 cycle delay until correct data on Q after a Read assertion
+-- Reads and writes can be made at each clock cycle
+ARCHITECTURE synchronous OF fifo IS
+    CONSTANT internal_depth : POSITIVE := depth + 1;
+
+    TYPE T_MEM IS ARRAY (0 TO internal_depth)
         OF STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
 
-    -- TODO: take steps to make sure this is synthesized as memory, not
-    -- registers
     SIGNAL mem : T_MEM;
+    SIGNAL mem_we : STD_LOGIC;
+    SIGNAL mem_d, mem_q : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+    SIGNAL mem_wr_ptr, mem_rd_ptr
+        : UNSIGNED(NATURAL(CEIL(LOG2(REAL(internal_depth)))) - 1 DOWNTO 0);
+
     SIGNAL sig_empty : STD_LOGIC;
     SIGNAL sig_full : STD_LOGIC;
     SIGNAL q_reg : STD_LOGIC_VECTOR(Q'length - 1 DOWNTO 0);
-
-    SIGNAL wp, rp : UNSIGNED(NATURAL(LOG2(REAL(DEPTH))) - 1 DOWNTO 0);
 BEGIN
+    -- Should be inferred using block RAM
     PROCESS(Clk)
-        VARIABLE wr_ptr, rd_ptr
-            : UNSIGNED(NATURAL(LOG2(REAL(DEPTH))) - 1 DOWNTO 0);
     BEGIN
-        IF wr_ptr = rd_ptr THEN
-            sig_full <= '1';
-        ELSE
-            sig_full <= '0';
+        IF rising_edge(Clk) THEN
+            IF mem_we = '1' THEN
+                mem(TO_INTEGER(mem_wr_ptr)) <= mem_d;
+            END IF;
         END IF;
-        IF (wr_ptr - rd_ptr) MOD depth = 1 THEN
-            sig_empty <= '1';
-        ELSE
-            sig_empty <= '0';
-        END IF;
-        q_reg <= mem(TO_INTEGER(rd_ptr + 1) MOD depth);
+    END PROCESS;
+    mem_q <= mem(TO_INTEGER(mem_rd_ptr));
+
+    PROCESS(Clk)
+        VARIABLE mem_wr_ptr_var, mem_rd_ptr_var
+            : UNSIGNED(NATURAL(CEIL(LOG2(REAL(internal_depth)))) - 1 DOWNTO 0);
+    BEGIN
         IF rising_edge(Clk) THEN
             IF Rst = '1' THEN
-                wr_ptr := TO_UNSIGNED(1, wr_ptr'length);
-                rd_ptr := (OTHERS => '0');
-                q_reg <= (OTHERS => '0');
+                mem_wr_ptr <= (OTHERS => '0');
+                mem_rd_ptr <= (OTHERS => '0');
+                mem_we <= '0';
+                sig_full <= '0';
+                sig_empty <= '1';
             ELSE
+                mem_wr_ptr_var := mem_wr_ptr;
+                mem_rd_ptr_var := mem_rd_ptr;
+                mem_we <= '0';
                 IF Write = '1' THEN
                     IF sig_full = '0' THEN
-                        mem(TO_INTEGER(wr_ptr)) <= D;
-                        wr_ptr := (wr_ptr + 1) MOD depth;
+                        mem_we <= '1';
+                        mem_d <= D;
+                        mem_wr_ptr <= (mem_wr_ptr + 1) MOD internal_depth;
+                        mem_wr_ptr_var := (mem_wr_ptr + 1) MOD internal_depth;
                     END IF;
                 END IF;
                 IF Read = '1' THEN
                     IF sig_empty = '0' THEN
-                        -- Read behaves like an acknowledge
-                        rd_ptr := (rd_ptr + 1) MOD depth;
+                        mem_rd_ptr <= (mem_rd_ptr + 1) MOD internal_depth;
+                        mem_rd_ptr_var := (mem_rd_ptr + 1) MOD internal_depth;
                     END IF;
+                END IF;
+                -- empty updates after 2 cycles, since the data needs to be in
+                -- the RAM before reads are attempted
+                IF mem_wr_ptr = mem_rd_ptr THEN
+                    sig_empty <= '1';
+                ELSE
+                    sig_empty <= '0';
+                END IF;
+                -- full updates after 1 cycle, since it should be updated ASAP
+                IF (mem_wr_ptr_var - mem_rd_ptr_var)
+                        = TO_UNSIGNED(2 ** mem_rd_ptr_var'length - 1,
+                        mem_rd_ptr_var'length) THEN
+                    sig_full <= '1';
+                ELSE
+                    sig_full <= '0';
                 END IF;
             END IF;
         END IF;
-        wp <= wr_ptr;
-        rp <= rd_ptr;
     END PROCESS;
     Empty <= sig_empty;
     Full <= sig_full;
-    Q <= q_reg;
+    Q <= mem_q;
 END ARCHITECTURE;
