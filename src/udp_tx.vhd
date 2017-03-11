@@ -815,7 +815,9 @@ BEGIN
                     IF shift_reg_q_start = '1' THEN
                         fifo_data_write <= '1';
                         started := true;
-                    ELSIF shift_reg_q_end = '1' THEN
+                    END IF;
+                    -- start and end can happen simultaneously
+                    IF shift_reg_q_end = '1' THEN
                         started := false;
                     END IF;
                 END IF;
