@@ -68,9 +68,8 @@ ARCHITECTURE synchronous OF fifo IS
     SIGNAL mem_wr_ptr, mem_rd_ptr
         : UNSIGNED(NATURAL(CEIL(LOG2(REAL(internal_depth)))) - 1 DOWNTO 0);
 
-    SIGNAL sig_empty : STD_LOGIC;
-    SIGNAL sig_full : STD_LOGIC;
-    SIGNAL q_reg : STD_LOGIC_VECTOR(Q'length - 1 DOWNTO 0);
+    SIGNAL reg_empty : STD_LOGIC;
+    SIGNAL reg_full : STD_LOGIC;
 BEGIN
     -- Should be inferred using block RAM
     PROCESS(Clk)
@@ -92,14 +91,14 @@ BEGIN
                 mem_wr_ptr <= (OTHERS => '0');
                 mem_rd_ptr <= (OTHERS => '0');
                 mem_we <= '0';
-                sig_full <= '0';
-                sig_empty <= '1';
+                reg_full <= '0';
+                reg_empty <= '1';
             ELSE
                 mem_wr_ptr_var := mem_wr_ptr;
                 mem_rd_ptr_var := mem_rd_ptr;
                 mem_we <= '0';
                 IF Write = '1' THEN
-                    IF sig_full = '0' THEN
+                    IF reg_full = '0' THEN
                         mem_we <= '1';
                         mem_d <= D;
                         mem_wr_ptr <= (mem_wr_ptr + 1) MOD internal_depth;
@@ -107,7 +106,7 @@ BEGIN
                     END IF;
                 END IF;
                 IF Read = '1' THEN
-                    IF sig_empty = '0' THEN
+                    IF reg_empty = '0' THEN
                         mem_rd_ptr <= (mem_rd_ptr + 1) MOD internal_depth;
                         mem_rd_ptr_var := (mem_rd_ptr + 1) MOD internal_depth;
                     END IF;
@@ -115,22 +114,22 @@ BEGIN
                 -- empty updates after 2 cycles, since the data needs to be in
                 -- the RAM before reads are attempted
                 IF mem_wr_ptr = mem_rd_ptr THEN
-                    sig_empty <= '1';
+                    reg_empty <= '1';
                 ELSE
-                    sig_empty <= '0';
+                    reg_empty <= '0';
                 END IF;
                 -- full updates after 1 cycle, since it should be updated ASAP
                 IF (mem_wr_ptr_var - mem_rd_ptr_var)
                         = TO_UNSIGNED(2 ** mem_rd_ptr_var'length - 1,
                         mem_rd_ptr_var'length) THEN
-                    sig_full <= '1';
+                    reg_full <= '1';
                 ELSE
-                    sig_full <= '0';
+                    reg_full <= '0';
                 END IF;
             END IF;
         END IF;
     END PROCESS;
-    Empty <= sig_empty;
-    Full <= sig_full;
+    Empty <= reg_empty;
+    Full <= reg_full;
     Q <= mem_q;
 END ARCHITECTURE;
