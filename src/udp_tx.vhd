@@ -535,7 +535,7 @@ BEGIN
                 p1_chk_accum <= p1_chk_accum_var;
                 -- Calculate length for UDP header (subtract input stream
                 -- header)
-                p1_udp_len <= p0_len_read - 12;
+                p1_udp_len <= resize(p0_len_read - 12, p1_udp_len'length);
 
                 --
                 -- Stage 2: Normal checksumming
