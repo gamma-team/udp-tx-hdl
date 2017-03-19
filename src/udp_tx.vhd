@@ -894,7 +894,7 @@ BEGIN
                 -- TODO: This part should compact the inserted fields
                 --       with the data stream to maximize throughput.
                 IF op0_fifo_read = '1' THEN
-                    FOR i IN 0 TO op1_valid'length LOOP
+                    FOR i IN 0 TO op1_valid'length - 1 LOOP
                         op1_valid(i) <= '1';
                         op1_count := op1_count + 1;
                         CASE TO_INTEGER(op1_count) IS
