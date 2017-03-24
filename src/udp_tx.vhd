@@ -441,41 +441,41 @@ BEGIN
                         p0_data_in_valid(i) <= '0';
                         CASE TO_INTEGER(p0_len_read_var) IS
                             WHEN DATA_IN_OFF_IP_SRC =>
-                                p0_addr_src(7 DOWNTO 0) <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_SRC + 1 =>
-                                p0_addr_src(15 DOWNTO 8)
-                                    <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_SRC + 2 =>
-                                p0_addr_src(23 DOWNTO 16)
-                                    <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_SRC + 3 =>
                                 p0_addr_src(31 DOWNTO 24)
                                     <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_SRC + 1 =>
+                                p0_addr_src(23 DOWNTO 16)
+                                    <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_SRC + 2 =>
+                                p0_addr_src(15 DOWNTO 8)
+                                    <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_SRC + 3 =>
+                                p0_addr_src(7 DOWNTO 0) <= data_in_sig(i);
                                 p0_addr_src_valid <= true;
                             WHEN DATA_IN_OFF_IP_DST =>
-                                p0_addr_dst(7 DOWNTO 0) <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_DST + 1 =>
-                                p0_addr_dst(15 DOWNTO 8)
-                                    <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_DST + 2 =>
-                                p0_addr_dst(23 DOWNTO 16)
-                                    <= data_in_sig(i);
-                            WHEN DATA_IN_OFF_IP_DST + 3 =>
                                 p0_addr_dst(31 DOWNTO 24)
                                     <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_DST + 1 =>
+                                p0_addr_dst(23 DOWNTO 16)
+                                    <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_DST + 2 =>
+                                p0_addr_dst(15 DOWNTO 8)
+                                    <= data_in_sig(i);
+                            WHEN DATA_IN_OFF_IP_DST + 3 =>
+                                p0_addr_dst(7 DOWNTO 0) <= data_in_sig(i);
                                 p0_addr_dst_valid <= true;
                             WHEN DATA_IN_OFF_UDP_PORT_SRC =>
-                                p0_udp_port_src(7 DOWNTO 0)
+                                p0_udp_port_src(15 DOWNTO 8)
                                     <= data_in_sig(i);
                             WHEN DATA_IN_OFF_UDP_PORT_SRC + 1 =>
-                                p0_udp_port_src(15 DOWNTO 8)
+                                p0_udp_port_src(7 DOWNTO 0)
                                     <= data_in_sig(i);
                                 p0_udp_port_src_valid <= true;
                             WHEN DATA_IN_OFF_UDP_PORT_DST =>
-                                p0_udp_port_dst(7 DOWNTO 0)
+                                p0_udp_port_dst(15 DOWNTO 8)
                                     <= data_in_sig(i);
                             WHEN DATA_IN_OFF_UDP_PORT_DST + 1 =>
-                                p0_udp_port_dst(15 DOWNTO 8)
+                                p0_udp_port_dst(7 DOWNTO 0)
                                     <= data_in_sig(i);
                                 p0_udp_port_dst_valid <= true;
                             WHEN OTHERS =>
@@ -894,49 +894,49 @@ BEGIN
                 -- TODO: This part should compact the inserted fields
                 --       with the data stream to maximize throughput.
                 IF op0_fifo_read = '1' THEN
-                    FOR i IN 0 TO op1_valid'length - 1 LOOP
+                    FOR i IN INTEGER RANGE 0 TO op1_valid'length - 1 LOOP
                         op1_valid(i) <= '1';
                         op1_count := op1_count + 1;
                         CASE TO_INTEGER(op1_count) IS
                             WHEN DATA_OUT_OFF_IP_SRC =>
-                                op1_data(i) <= fifo_q_addr_src(7 DOWNTO 0);
+                                op1_data(i) <= fifo_q_addr_src(31 DOWNTO 24);
                                 op1_start <= '1';
                             WHEN DATA_OUT_OFF_IP_SRC + 1 =>
-                                op1_data(i) <= fifo_q_addr_src(15 DOWNTO 8);
-                            WHEN DATA_OUT_OFF_IP_SRC + 2 =>
                                 op1_data(i) <= fifo_q_addr_src(23 DOWNTO 16);
+                            WHEN DATA_OUT_OFF_IP_SRC + 2 =>
+                                op1_data(i) <= fifo_q_addr_src(15 DOWNTO 8);
                             WHEN DATA_OUT_OFF_IP_SRC + 3 =>
-                                op1_data(i) <= fifo_q_addr_src(31 DOWNTO 24);
+                                op1_data(i) <= fifo_q_addr_src(7 DOWNTO 0);
                             WHEN DATA_OUT_OFF_IP_DST =>
-                                op1_data(i) <= fifo_q_addr_dst(7 DOWNTO 0);
-                            WHEN DATA_OUT_OFF_IP_DST + 1 =>
-                                op1_data(i) <= fifo_q_addr_dst(15 DOWNTO 8);
-                            WHEN DATA_OUT_OFF_IP_DST + 2 =>
-                                op1_data(i) <= fifo_q_addr_dst(23 DOWNTO 16);
-                            WHEN DATA_OUT_OFF_IP_DST + 3 =>
                                 op1_data(i) <= fifo_q_addr_dst(31 DOWNTO 24);
+                            WHEN DATA_OUT_OFF_IP_DST + 1 =>
+                                op1_data(i) <= fifo_q_addr_dst(23 DOWNTO 16);
+                            WHEN DATA_OUT_OFF_IP_DST + 2 =>
+                                op1_data(i) <= fifo_q_addr_dst(15 DOWNTO 8);
+                            WHEN DATA_OUT_OFF_IP_DST + 3 =>
+                                op1_data(i) <= fifo_q_addr_dst(7 DOWNTO 0);
                             WHEN DATA_OUT_OFF_PROTO =>
                                 op1_data(i) <= UDP_PROTO;
                             WHEN DATA_OUT_OFF_UDP_PORT_SRC =>
                                 op1_data(i)
-                                    <= fifo_q_udp_port_src(7 DOWNTO 0);
+                                    <= fifo_q_udp_port_src(15 DOWNTO 8);
                             WHEN DATA_OUT_OFF_UDP_PORT_SRC + 1 =>
                                 op1_data(i)
-                                    <= fifo_q_udp_port_src(15 DOWNTO 8);
+                                    <= fifo_q_udp_port_src(7 DOWNTO 0);
                             WHEN DATA_OUT_OFF_UDP_PORT_DST =>
                                 op1_data(i)
-                                    <= fifo_q_udp_port_dst(7 DOWNTO 0);
+                                    <= fifo_q_udp_port_dst(15 DOWNTO 8);
                             WHEN DATA_OUT_OFF_UDP_PORT_DST + 1 =>
                                 op1_data(i)
-                                    <= fifo_q_udp_port_dst(15 DOWNTO 8);
+                                    <= fifo_q_udp_port_dst(7 DOWNTO 0);
                             WHEN DATA_OUT_OFF_UDP_LEN =>
-                                op1_data(i) <= fifo_q_udp_len(7 DOWNTO 0);
-                            WHEN DATA_OUT_OFF_UDP_LEN + 1 =>
                                 op1_data(i) <= fifo_q_udp_len(15 DOWNTO 8);
+                            WHEN DATA_OUT_OFF_UDP_LEN + 1 =>
+                                op1_data(i) <= fifo_q_udp_len(7 DOWNTO 0);
                             WHEN DATA_OUT_OFF_UDP_CHK =>
-                                op1_data(i) <= fifo_q_udp_chk(7 DOWNTO 0);
-                            WHEN DATA_OUT_OFF_UDP_CHK + 1 =>
                                 op1_data(i) <= fifo_q_udp_chk(15 DOWNTO 8);
+                            WHEN DATA_OUT_OFF_UDP_CHK + 1 =>
+                                op1_data(i) <= fifo_q_udp_chk(7 DOWNTO 0);
                                 op1_hdr_sent := true;
                             WHEN OTHERS =>
                                 op1_valid(i) <= '0';
