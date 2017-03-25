@@ -1,5 +1,6 @@
 -- UDP streaming transmitter
 --
+-- TODO: Add support for the Data_in_err
 -- TODO: Add flushing logic, since it will pause when no data is flowing in.
 -- TODO: Error handling
 -- Note: By design, the FIFOs should never fill up
@@ -58,6 +59,8 @@ ENTITY udp_tx IS
         Data_in_start : IN STD_LOGIC;
         -- Asserted when the last valid data is available on Data_in.
         Data_in_end : IN STD_LOGIC;
+        -- Indicate that there has been an error in the current transfer.
+        Data_in_err : IN STD_LOGIC;
 
         -- UDP datagram output bus to the IP layer.
         -- Byte offsets (all integer types are big endian):
