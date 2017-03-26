@@ -1,6 +1,4 @@
--- Vendor-independent interface for a shift RAM. Will complain if data length
--- is mismatched with the vendor component. However, it will not complain if
--- the depth is mismatched.
+-- Vendor-independent interface for a shift RAM.
 --
 -- Copyright 2017 Patrick Gauvin
 --
@@ -31,6 +29,7 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 LIBRARY ieee;
 USE ieee.std_logic_1164.ALL;
+LIBRARY c_shift_ram_v12_0_10;
 
 ENTITY shift_ram_abstract IS
     GENERIC (
@@ -46,18 +45,13 @@ ENTITY shift_ram_abstract IS
 END ENTITY;
 
 ARCHITECTURE xilinx OF shift_ram_abstract IS
-    CONSTANT xilinx_width : NATURAL := 64;
-
-    COMPONENT xilinx_shift_ram IS
-        PORT (
-            Clk : IN STD_LOGIC;
-            Ce : IN STD_LOGIC;
-            D : IN STD_LOGIC_VECTOR(xilinx_width - 1 DOWNTO 0);
-            Q : OUT STD_LOGIC_VECTOR(xilinx_width - 1 DOWNTO 0)
-        );
-    END COMPONENT;
 BEGIN
-    c_xilinx_shift_ram: xilinx_shift_ram
+    c_xilinx_shift_ram: ENTITY c_shift_ram_v12_0_10.c_shift_ram_v12_0_10
+        GENERIC MAP (
+            C_WIDTH => width,
+            C_DEPTH => depth,
+            C_HAS_CE => 1
+        )
         PORT MAP (
             Clk => Clk,
             Ce => Ce,
