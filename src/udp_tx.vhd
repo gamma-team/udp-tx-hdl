@@ -1,7 +1,6 @@
 -- UDP streaming transmitter
 --
 -- TODO: Add support for the Data_in_err
--- TODO: Add flushing logic, since it will pause when no data is flowing in.
 -- TODO: Error handling
 -- Note: By design, the FIFOs should never fill up
 --
@@ -99,33 +98,23 @@ ARCHITECTURE normal OF udp_tx IS
         );
     END COMPONENT;
 
-    COMPONENT shift_reg IS
+    COMPONENT stream_packer IS
         GENERIC (
-            width : POSITIVE;
-            depth : POSITIVE
+            width : POSITIVE := 4
         );
         PORT (
             Clk : IN STD_LOGIC;
-            Rst : IN STD_LOGIC;
-            Ena : IN STD_LOGIC;
-            D : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
-            Q : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0)
+            Rstn : IN STD_LOGIC;
+            In_data : IN STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
+            In_valid : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            In_last : IN STD_LOGIC;
+            In_ready : OUT STD_LOGIC;
+            Out_data : OUT STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
+            Out_valid : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            Out_last : OUT STD_LOGIC;
+            Out_ready : IN STD_LOGIC
         );
     END COMPONENT;
-
-    COMPONENT shift_ram_abstract IS
-        GENERIC (
-            width : POSITIVE;
-            depth : POSITIVE
-        );
-        PORT (
-            Clk : IN STD_LOGIC;
-            Ce : IN STD_LOGIC;
-            D : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
-            Q : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0)
-        );
-    END COMPONENT;
-
 
     -- 17 bit counters allow for the extra header information (not UDP header
     -- information) in the data streams. UDP datagrams are 65536 bytes,
@@ -136,6 +125,8 @@ ARCHITECTURE normal OF udp_tx IS
     CONSTANT DATA_IN_OFF_UDP_PORT_SRC : NATURAL := DATA_IN_OFF_IP_DST + 4;
     CONSTANT DATA_IN_OFF_UDP_PORT_DST : NATURAL
         := DATA_IN_OFF_UDP_PORT_SRC + 2;
+    CONSTANT DATA_IN_OFF_UDP_PAYLOAD : NATURAL
+        := DATA_IN_OFF_UDP_PORT_DST + 2;
     CONSTANT DATA_OUT_OFF_IP_SRC : NATURAL := 0;
     CONSTANT DATA_OUT_OFF_IP_DST : NATURAL := DATA_OUT_OFF_IP_SRC + 4;
     CONSTANT DATA_OUT_OFF_PROTO : NATURAL := DATA_OUT_OFF_IP_DST + 4;
@@ -144,14 +135,20 @@ ARCHITECTURE normal OF udp_tx IS
         := DATA_OUT_OFF_UDP_PORT_SRC + 2;
     CONSTANT DATA_OUT_OFF_UDP_LEN : NATURAL := DATA_OUT_OFF_UDP_PORT_DST + 2;
     CONSTANT DATA_OUT_OFF_UDP_CHK : NATURAL := DATA_OUT_OFF_UDP_LEN + 2;
-    CONSTANT SHIFT_RAM_DEPTH : NATURAL := 65536 / (width * 8);
+    CONSTANT DATA_OUT_OFF_UDP_PAYLOAD : NATURAL := DATA_OUT_OFF_UDP_CHK + 2;
+    CONSTANT FIFO_BUFFER_DEPTH : NATURAL := 65536 / (width * 8);
     CONSTANT UDP_PROTO : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"11";
 
     TYPE DATA_BUS IS ARRAY (width - 1 DOWNTO 0)
         OF STD_LOGIC_VECTOR(7 DOWNTO 0);
     TYPE BOOLEAN_VECTOR IS ARRAY (NATURAL RANGE <>) OF BOOLEAN;
+    TYPE HEADER_FSM
+        IS (S_WAIT_HDR, S_WAIT_HDR_VALID, S_OUTPUT_HDR, S_OUTPUT_DATA);
 
     SIGNAL data_in_sig : DATA_BUS;
+    SIGNAL rstn : STD_LOGIC;
+
+    SIGNAL state : HEADER_FSM;
 
     SIGNAL p0_data_in : DATA_BUS;
     SIGNAL p0_data_in_valid
@@ -211,7 +208,11 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL p3_udp_chk : UNSIGNED(15 DOWNTO 0);
 
     SIGNAL p4_data_out : DATA_BUS;
+    SIGNAL p4_data_out_sig
+        : STD_LOGIC_VECTOR(p4_data_out'length * 8 - 1 DOWNTO 0);
     SIGNAL p4_data_out_valid : BOOLEAN_VECTOR(p4_data_out'length - 1 DOWNTO 0);
+    SIGNAL p4_data_out_valid_sig
+        : STD_LOGIC_VECTOR(p4_data_out_valid'length - 1 DOWNTO 0);
     SIGNAL p4_data_out_start : STD_LOGIC;
     SIGNAL p4_data_out_end : STD_LOGIC;
     SIGNAL p4_data_out_err : STD_LOGIC;
@@ -224,32 +225,21 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL p4_fifo_hdr_write : STD_LOGIC;
 
     SIGNAL p5_data_out : DATA_BUS;
+    SIGNAL p5_data_out_sig
+        : STD_LOGIC_VECTOR(p5_data_out'length * 8 - 1 DOWNTO 0);
     SIGNAL p5_data_out_valid : BOOLEAN_VECTOR(p5_data_out'length - 1 DOWNTO 0);
+    SIGNAL p5_data_out_valid_sig
+        : STD_LOGIC_VECTOR(p5_data_out_valid'length - 1 DOWNTO 0);
     SIGNAL p5_data_out_start : STD_LOGIC;
     SIGNAL p5_data_out_end : STD_LOGIC;
     SIGNAL p5_data_out_err : STD_LOGIC;
-    SIGNAL p5_data_buf : DATA_BUS;
-    SIGNAL p5_data_buf_valid : BOOLEAN_VECTOR(p5_data_out'length - 1 DOWNTO 0);
-    SIGNAL p5_data_buf_start : STD_LOGIC;
-    SIGNAL p5_data_buf_end : STD_LOGIC;
 
+    SIGNAL p6_started : BOOLEAN;
     SIGNAL p6_data_out : DATA_BUS;
     SIGNAL p6_data_out_start : STD_LOGIC;
     SIGNAL p6_data_out_end : STD_LOGIC;
     SIGNAL p6_data_out_err : STD_LOGIC;
-    SIGNAL p6_shift_ena : STD_LOGIC;
-
-    SIGNAL shift_reg_ena : STD_LOGIC;
-    SIGNAL shift_reg_d : STD_LOGIC_VECTOR(2 DOWNTO 0);
-    SIGNAL shift_reg_q : STD_LOGIC_VECTOR(2 DOWNTO 0);
-    SIGNAL shift_reg_q_start : STD_LOGIC;
-    SIGNAL shift_reg_q_end : STD_LOGIC;
-    SIGNAL shift_reg_q_err : STD_LOGIC;
-
-    SIGNAL shift_ram_ena : STD_LOGIC;
-    SIGNAL shift_ram_d : STD_LOGIC_VECTOR(Data_in'length - 1 DOWNTO 0);
-    SIGNAL shift_ram_q : STD_LOGIC_VECTOR(shift_ram_d'length - 1 DOWNTO 0);
-    SIGNAL shift_ram_q_data : DATA_BUS;
+    SIGNAL p6_fifo_buffer_we : STD_LOGIC;
 
     SIGNAL fifo_d
         : STD_LOGIC_VECTOR(p4_udp_chk'length + p4_udp_len'length
@@ -271,25 +261,40 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL fifo_q_udp_port_dst
         : STD_LOGIC_VECTOR(p4_udp_port_dst'length - 1 DOWNTO 0);
 
-    SIGNAL fifo_data_d
-        : STD_LOGIC_VECTOR(1 + shift_ram_q'length - 1 DOWNTO 0);
-    SIGNAL fifo_data_q : STD_LOGIC_VECTOR(fifo_data_d'length - 1 DOWNTO 0);
-    SIGNAL fifo_data_write : STD_LOGIC;
-    SIGNAL fifo_data_read : STD_LOGIC;
-    SIGNAL fifo_data_empty : STD_LOGIC;
-    SIGNAL fifo_data_full : STD_LOGIC;
-    SIGNAL fifo_data_q_data : DATA_BUS;
-    SIGNAL fifo_data_q_end : STD_LOGIC;
+    SIGNAL fifo_buffer_d
+        : STD_LOGIC_VECTOR(width * 8 + 3 - 1 DOWNTO 0);
+    SIGNAL fifo_buffer_q : STD_LOGIC_VECTOR(fifo_buffer_d'length - 1 DOWNTO 0);
+    SIGNAL fifo_buffer_write : STD_LOGIC;
+    SIGNAL fifo_buffer_read : STD_LOGIC;
+    SIGNAL fifo_buffer_empty : STD_LOGIC;
+    SIGNAL fifo_buffer_full : STD_LOGIC;
+    SIGNAL fifo_buffer_q_data : DATA_BUS;
+    SIGNAL fifo_buffer_q_start : STD_LOGIC;
+    SIGNAL fifo_buffer_q_err : STD_LOGIC;
+    SIGNAL fifo_buffer_q_end : STD_LOGIC;
 
-    SIGNAL op0_fifo_read : STD_LOGIC;
-    SIGNAL op0_fifo_data_read : STD_LOGIC;
+    SIGNAL op0a_fifo_buffer_read : STD_LOGIC;
+    SIGNAL op0a_fifo_buffer_q_data : DATA_BUS;
+    SIGNAL op0a_fifo_buffer_q_start : STD_LOGIC;
+    SIGNAL op0a_fifo_buffer_q_err : STD_LOGIC;
+    SIGNAL op0a_fifo_buffer_q_end : STD_LOGIC;
+    SIGNAL op0b_fifo_buffer_read : STD_LOGIC;
+    SIGNAL op0b_fifo_buffer_q_data : DATA_BUS;
+    SIGNAL op0b_fifo_buffer_q_start : STD_LOGIC;
+    SIGNAL op0b_fifo_buffer_q_err : STD_LOGIC;
+    SIGNAL op0b_fifo_buffer_q_end : STD_LOGIC;
 
     SIGNAL op1_data : DATA_BUS;
+    SIGNAL op1_count : UNSIGNED(16 DOWNTO 0); -- Extra bit for stream header
     SIGNAL op1_valid : STD_LOGIC_VECTOR(Data_out_valid'length - 1 DOWNTO 0);
     SIGNAL op1_start : STD_LOGIC;
     SIGNAL op1_end : STD_LOGIC;
     SIGNAL op1_err : STD_LOGIC;
+    SIGNAL op1_hdr_sent : BOOLEAN;
+    SIGNAL op1_data_sent : BOOLEAN;
 BEGIN
+    rstn <= NOT Rst;
+
     -- Input signal wiring
     gen_in_data: FOR i IN 0 TO width - 1 GENERATE
         data_in_sig(i) <= Data_in((i + 1) * 8 - 1 DOWNTO i * 8);
@@ -331,11 +336,6 @@ BEGIN
         VARIABLE p2_chk_accum_var
             : UNSIGNED(p2_chk_accum'length - 1 DOWNTO 0);
         VARIABLE p4_j : NATURAL;
-        VARIABLE p5_data_buf_valid_var
-            : BOOLEAN_VECTOR(p5_data_buf_valid'length - 1 DOWNTO 0);
-        VARIABLE p5_data_out_valid_var
-            : BOOLEAN_VECTOR(p5_data_out_valid'length - 1 DOWNTO 0);
-        VARIABLE p5_j : NATURAL;
     BEGIN
         IF rising_edge(Clk) THEN
             IF Rst = '1' THEN
@@ -404,21 +404,15 @@ BEGIN
                 p4_udp_chk <= (OTHERS => '0');
                 p4_fifo_hdr_write <= '0';
 
-                p5_data_out <= (OTHERS => (OTHERS => '0'));
-                p5_data_out_valid <= (OTHERS => false);
                 p5_data_out_start <= '0';
-                p5_data_out_end <= '0';
                 p5_data_out_err <= '0';
-                p5_data_buf <= (OTHERS => (OTHERS => '0'));
-                p5_data_buf_valid <= (OTHERS => false);
-                p5_data_buf_start <= '0';
-                p5_data_buf_end <= '0';
 
                 p6_data_out <= (OTHERS => (OTHERS => '0'));
                 p6_data_out_start <= '0';
                 p6_data_out_end <= '0';
                 p6_data_out_err <= '0';
-                p6_shift_ena <= '0';
+                p6_fifo_buffer_we <= '0';
+                p6_started <= FALSE;
             ELSE
                 --
                 -- Stage 0: Byte decoding
@@ -538,7 +532,9 @@ BEGIN
                 p1_chk_accum <= p1_chk_accum_var;
                 -- Calculate length for UDP header (subtract input stream
                 -- header)
-                p1_udp_len <= resize(p0_len_read - 12, p1_udp_len'length);
+                p1_udp_len <=
+                    resize(p0_len_read - DATA_IN_OFF_UDP_PAYLOAD + 8,
+                    p1_udp_len'length);
 
                 --
                 -- Stage 2: Normal checksumming
@@ -548,11 +544,11 @@ BEGIN
                 p2_data_in_start <= p1_data_in_start;
                 p2_data_in_end <= p1_data_in_end;
                 p2_data_in_err <= p1_data_in_err;
-                p2_addr_src <= p3_addr_src;
-                p2_addr_dst <= p3_addr_dst;
-                p2_udp_port_src <= p3_udp_port_src;
-                p2_udp_port_dst <= p3_udp_port_dst;
-                p2_udp_len <= p3_udp_len;
+                p2_addr_src <= p1_addr_src;
+                p2_addr_dst <= p1_addr_dst;
+                p2_udp_port_src <= p1_udp_port_src;
+                p2_udp_port_dst <= p1_udp_port_dst;
+                p2_udp_len <= p1_udp_len;
 
                 p2_internal_off_var := p2_internal_off;
                 p2_chk_addend_var := p2_chk_addend;
@@ -608,7 +604,7 @@ BEGIN
                     + p2_chk_accum(15 DOWNTO 0);
 
                 --
-                -- Stage 4: Prepare data for shift-ram step 1 (compact data,
+                -- Stage 4: Prepare data for FIFO buffer step 1 (compact data,
                 -- technically unnecessary because of stage 5's design, remove
                 -- later, or update stage 5 to take advantage of this)
                 --
@@ -645,127 +641,101 @@ BEGIN
                 -- handled correctly, probably need a testbench to be sure.
                 --
                 p5_data_out_err <= p4_data_out_err;
-                p5_data_buf_valid_var := p5_data_buf_valid;
-                p5_data_out_valid_var := p5_data_out_valid;
-                -- Replace output only after it has filled for one cycle, or
-                -- the last signal was asserted with it.
-                IF all_true(p5_data_out_valid_var)
-                        OR p5_data_out_end = '1' THEN
-                    p5_data_out_valid_var := (OTHERS => false);
-                END IF;
-                p5_j := 0;
-                p5_data_out_start <= '0';
-                p5_data_out_end <= '0';
-                FOR i IN INTEGER RANGE 0 TO p5_data_out'length - 1 LOOP
-                    IF NOT p5_data_out_valid(i) THEN
-                        -- First move data from the buffer to the output
-                        FOR j IN INTEGER RANGE 0 TO p5_data_buf'length - 1
-                                LOOP
-                            IF p5_data_buf_valid_var(j) THEN
-                                p5_data_out(i) <= p5_data_buf(j);
-                                p5_data_out_valid_var(i) := true;
-                                p5_data_buf_valid_var(j) := false;
-                                p5_data_out_end <= p5_data_buf_end;
-                                p5_data_buf_end <= '0';
-                                p5_data_out_start <= p5_data_buf_start;
-                            END IF;
-                        END LOOP;
-                        -- Place incoming data into the output if out of
-                        -- buffered data, and it is not "end" data.
-                        IF NOT p5_data_out_valid_var(i)
-                                AND p5_data_buf_end /= '1' THEN
-                            FOR j IN INTEGER RANGE 0 to p4_data_out'length - 1
-                                    LOOP
-                                IF p4_data_out_valid(j) THEN
-                                    p5_data_out(i) <= p4_data_out(j);
-                                    p5_data_out_valid_var(i) := true;
-                                    p4_data_out_valid(j) <= false;
-                                    p5_data_out_end <= p4_data_out_end;
-                                    p5_data_out_start <= p4_data_out_start
-                                        OR p5_data_buf_start;
-                                END IF;
-                            END LOOP;
-                        END IF;
-                    END IF;
-                END LOOP;
-                -- Insert remaining input data into the buffer. The buffer
-                -- will always be empty at this point.
-                p5_data_buf_valid <= (OTHERS => false);
-                p5_j := 0;
-                FOR i IN INTEGER RANGE 0 TO p4_data_out_valid'length - 1 LOOP
-                    IF p4_data_out_valid(i) THEN
-                        p5_data_buf(p5_j) <= p4_data_out(i);
-                        p5_data_buf_valid(p5_j) <= true;
-                        p5_j := p5_j + 1;
-                        p5_data_buf_end <= p4_data_out_end;
-                        p5_data_buf_start <= p4_data_out_start;
-                    END IF;
-                END LOOP;
+                -- Remaining connections are with c_stream_packer below
 
                 --
-                -- Stage 6: Handle shift enable
+                -- Stage 6: Handle writing to the FIFO buffer
                 --
                 p6_data_out <= p5_data_out;
-                p6_data_out_start <= p5_data_out_start;
+                p6_data_out_start <= '0';
                 p6_data_out_end <= p5_data_out_end;
                 p6_data_out_err <= p5_data_out_err;
-                p6_shift_ena <= '0';
+                p6_fifo_buffer_we <= '0';
                 IF p5_data_out_end = '1' OR all_true(p5_data_out_valid) THEN
-                    p6_shift_ena <= '1';
+                    IF NOT p6_started THEN
+                        p6_data_out_start <= '1';
+                        p6_started <= TRUE;
+                    END IF;
+                    IF p5_data_out_end = '1' THEN
+                        p6_started <= FALSE;
+                    END IF;
+                    p6_fifo_buffer_we <= '1';
                 END IF;
             END IF;
         END IF;
     END PROCESS;
 
-    -- Shift register for control signals (need to be able to reset all to 0)
-    shift_reg_ena <= p6_shift_ena;
-    shift_reg_d <= p6_data_out_start & p6_data_out_end & p6_data_out_err;
-    c_shift_reg: shift_reg
+    g_p5_data_in: FOR i IN INTEGER RANGE 0 TO p4_data_out'length - 1 GENERATE
+        p4_data_out_sig((i + 1) * 8 - 1 DOWNTO i * 8) <= p4_data_out(i);
+    END GENERATE;
+    g_p5_valid_in: FOR i IN INTEGER RANGE 0 TO p4_data_out_valid'length - 1
+            GENERATE
+        p4_data_out_valid_sig(i) <= '1' WHEN p4_data_out_valid(i) ELSE '0';
+    END GENERATE;
+    g_p5_data_out: FOR i IN 0 TO width - 1 GENERATE
+        p5_data_out(i) <= p5_data_out_sig((i + 1) * 8 - 1 DOWNTO i * 8);
+    END GENERATE;
+    g_p5_valid_out: FOR i IN INTEGER RANGE 0 TO p5_data_out_valid'length - 1
+            GENERATE
+        p5_data_out_valid(i) <= TRUE WHEN p5_data_out_valid_sig(i) = '1'
+            ELSE FALSE;
+    END GENERATE;
+    c_stream_packer: stream_packer
         GENERIC MAP (
-            width => shift_reg_d'length,
-            depth => SHIFT_RAM_DEPTH -- same depth as the shift ram
+            width => p5_data_out'length
+        )
+        PORT MAP (
+            Clk => Clk,
+            Rstn => rstn,
+            In_data => p4_data_out_sig,
+            In_valid => p4_data_out_valid_sig,
+            In_last => p4_data_out_end,
+            In_ready => OPEN,
+            Out_data => p5_data_out_sig,
+            Out_valid => p5_data_out_valid_sig,
+            Out_last => p5_data_out_end,
+            Out_ready => '1'
+        );
+
+    -- Buffer FIFO, stores data while waiting for header calculations
+    fifo_buffer_write <= p6_fifo_buffer_we;
+    g_fifo_buffer_d: FOR i IN INTEGER RANGE 0 TO p6_data_out'length - 1
+            GENERATE
+        fifo_buffer_d((i + 1) * 8 - 1 DOWNTO i * 8) <= p6_data_out(i);
+    END GENERATE;
+    fifo_buffer_d(fifo_buffer_d'length - 1 DOWNTO p6_data_out'length * 8)
+        <= p6_data_out_start & p6_data_out_end & p6_data_out_err;
+    c_fifo_buffer: fifo
+        GENERIC MAP (
+            width => fifo_buffer_d'length,
+            depth => FIFO_BUFFER_DEPTH
         )
         PORT MAP (
             Clk => Clk,
             Rst => Rst,
-            Ena => shift_reg_ena,
-            D => shift_reg_d,
-            Q => shift_reg_q
+            Read => fifo_buffer_read,
+            Write => fifo_buffer_write,
+            D => fifo_buffer_d,
+            Empty => fifo_buffer_empty,
+            Full => fifo_buffer_full,
+            Q => fifo_buffer_q
         );
-    shift_reg_q_start <= shift_reg_q(2);
-    shift_reg_q_end <= shift_reg_q(1);
-    shift_reg_q_err <= shift_reg_q(0);
-
-    -- Shift RAM for data
-    shift_ram_ena <= p6_shift_ena;
-    g_shift_ram_d: FOR i IN INTEGER RANGE 0 TO p6_data_out'length - 1 GENERATE
-        shift_ram_d((i + 1) * 8 - 1 DOWNTO i * 8) <= p6_data_out(i);
+    g_fifo_buffer_q: FOR i IN INTEGER RANGE 0
+            TO fifo_buffer_q_data'length - 1 GENERATE
+        fifo_buffer_q_data(i) <= fifo_buffer_q((i + 1) * 8 - 1 DOWNTO i * 8);
     END GENERATE;
-    c_shift_ram: shift_ram_abstract
-        GENERIC MAP (
-            width => shift_ram_d'length,
-            depth => SHIFT_RAM_DEPTH
-        )
-        PORT MAP (
-            Clk => Clk,
-            Ce => shift_ram_ena,
-            D => shift_ram_d,
-            Q => shift_ram_q
-        );
-    g_shift_ram_q_data: FOR i IN INTEGER RANGE 0
-            TO shift_ram_q_data'length - 1 GENERATE
-        shift_ram_q_data(i) <= shift_ram_q((i + 1) * 8 - 1 DOWNTO i * 8);
-    END GENERATE;
+    fifo_buffer_q_start <= fifo_buffer_q(fifo_buffer_q_data'length - 1);
+    fifo_buffer_q_end <= fifo_buffer_q(fifo_buffer_q_data'length - 2);
+    fifo_buffer_q_err <= fifo_buffer_q(fifo_buffer_q_data'length - 3);
 
     -- FIFO for forwarding header information
     fifo_d <= STD_LOGIC_VECTOR(p4_udp_chk) & STD_LOGIC_VECTOR(p4_udp_len)
         & p4_addr_src & p4_addr_dst & p4_udp_port_src & p4_udp_port_dst;
     fifo_write <= p4_fifo_hdr_write;
-    fifo_read <= op0_fifo_read;
     c_fifo_hdr: fifo
         GENERIC MAP (
             width => fifo_d'length,
-            depth => 32 -- FIXME: determine necessary depth
+            depth => 32 -- FIXME: determine necessary depth based on worst case
         )
         PORT MAP (
             Clk => Clk,
@@ -803,161 +773,200 @@ BEGIN
         - fifo_q_udp_port_src'length - fifo_q_udp_port_dst'length);
 
     PROCESS(Clk)
-        VARIABLE started : BOOLEAN;
+        FUNCTION n_to_valid (n : INTEGER)
+            RETURN STD_LOGIC_VECTOR IS
+            VARIABLE o : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        BEGIN
+            o := (OTHERS => '0');
+            FOR i IN 0 TO n - 1 LOOP
+                o(i) := '1';
+            END LOOP;
+            RETURN o;
+        END FUNCTION;
+        VARIABLE op1_count_var : UNSIGNED(op1_count'length - 1 DOWNTO 0);
     BEGIN
         IF rising_edge(Clk) THEN
             IF Rst = '1' THEN
-                started := false;
-                fifo_data_write <= '0';
-            ELSE
-                --
-                -- Final data FIFO control machine
-                --
-                fifo_data_write <= '0';
-                fifo_data_d <= shift_reg_q_end & shift_ram_q;
-                IF p6_shift_ena = '1' THEN
-                    IF started THEN
-                        fifo_data_write <= '1';
-                    END IF;
-                    IF shift_reg_q_start = '1' THEN
-                        fifo_data_write <= '1';
-                        started := true;
-                    END IF;
-                    -- start and end can happen simultaneously
-                    IF shift_reg_q_end = '1' THEN
-                        started := false;
-                    END IF;
-                END IF;
-            END IF;
-        END IF;
-    END PROCESS;
-
-
-    -- FIFO for data coming out of the shift RAM
-    fifo_data_read <= op0_fifo_data_read;
-    c_fifo_data: fifo
-        GENERIC MAP (
-            width => fifo_data_d'length,
-            depth => 32 -- FIXME: Find necessary depth, should depend on width
-        )
-        PORT MAP (
-            Clk => Clk,
-            Rst => Rst,
-            Read => fifo_data_read,
-            Write => fifo_data_write,
-            D => fifo_data_d,
-            Empty => fifo_data_empty,
-            Full => fifo_data_full,
-            Q => fifo_data_q
-        );
-    fifo_data_q_end <= fifo_data_q(fifo_data_q_data'length - 1);
-    g_fifo_data_q_data: FOR i IN INTEGER RANGE 0
-            TO fifo_data_q_data'length - 1 GENERATE
-        fifo_data_q_data(i) <= fifo_data_q((i + 1) * 8 - 1 DOWNTO i * 8);
-    END GENERATE;
-
-    PROCESS(Clk)
-        -- One bit larger than UDP length field to accomodate the stream
-        -- header.
-        VARIABLE op1_count : UNSIGNED(16 DOWNTO 0);
-        VARIABLE op1_hdr_sent : BOOLEAN;
-    BEGIN
-        IF rising_edge(Clk) THEN
-            IF Rst = '1' THEN
-                op0_fifo_read <= '0';
-                op0_fifo_data_read <= '0';
+                op0a_fifo_buffer_read <= '0';
+                op0b_fifo_buffer_read <= '0';
                 op1_data <= (OTHERS => (OTHERS => '0'));
                 op1_valid <= (OTHERS => '0');
                 op1_start <= '0';
                 op1_end <= '0';
                 op1_err <= '0';
-                op1_hdr_sent := false;
-                op1_count := (OTHERS => '0');
+                op1_hdr_sent <= false;
+                op1_data_sent <= false;
+                op1_count <= (OTHERS => '0');
             ELSE
+                op0a_fifo_buffer_read <= fifo_buffer_read;
                 --
-                -- Stage 0: Initiate FIFO reads
+                -- Stage 0: Buffer reads from the buffer FIFO
                 --
-                op0_fifo_read <= '0';
-                op0_fifo_data_read <= '0';
-                -- Send header as soon as information available
-                IF fifo_empty /= '1' AND NOT op1_hdr_sent THEN
-                    op0_fifo_read <= '1';
-                ELSIF fifo_data_empty /= '1' THEN
-                    op0_fifo_data_read <= '1';
-                END IF;
+                op0b_fifo_buffer_q_data <= fifo_buffer_q_data;
+                op0b_fifo_buffer_q_start <= fifo_buffer_q_start;
+                op0b_fifo_buffer_q_end <= fifo_buffer_q_end;
+                op0b_fifo_buffer_read <= op0a_fifo_buffer_read;
+
+                -- TODO: may need to add a previous stage so we can hold data
+                -- once an end is encountered
 
                 --
-                -- Stage 1: Data processing (FIFO data valid)
+                -- Stage 1: Insert
                 --
-                op1_data <= fifo_data_q_data;
+                op1_data <= op0b_fifo_buffer_q_data;
                 op1_valid <= (OTHERS => '0');
                 op1_start <= '0';
                 op1_end <= '0';
                 op1_err <= '0';
-                -- TODO: This part should compact the inserted fields
-                --       with the data stream to maximize throughput.
-                IF op0_fifo_read = '1' THEN
+                op1_count_var := op1_count;
+                op1_data <= op0b_fifo_buffer_q_data;
+                -- Prepare for header data arrival
+                IF state = S_WAIT_HDR_VALID THEN
+                    op1_count <= (OTHERS => '0');
+                    op1_hdr_sent <= FALSE;
+                    op1_data_sent <= FALSE;
+                -- Header FIFO data is valid in this state, output it
+                ELSIF state = S_OUTPUT_HDR THEN
+                    IF op1_count_var >= DATA_OUT_OFF_UDP_PAYLOAD THEN
+                        op1_hdr_sent <= TRUE;
+                    END IF;
                     FOR i IN INTEGER RANGE 0 TO op1_valid'length - 1 LOOP
                         op1_valid(i) <= '1';
-                        op1_count := op1_count + 1;
-                        CASE TO_INTEGER(op1_count) IS
+                        CASE TO_INTEGER(op1_count_var) IS
                             WHEN DATA_OUT_OFF_IP_SRC =>
                                 op1_data(i) <= fifo_q_addr_src(31 DOWNTO 24);
                                 op1_start <= '1';
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_SRC + 1 =>
                                 op1_data(i) <= fifo_q_addr_src(23 DOWNTO 16);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_SRC + 2 =>
                                 op1_data(i) <= fifo_q_addr_src(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_SRC + 3 =>
                                 op1_data(i) <= fifo_q_addr_src(7 DOWNTO 0);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_DST =>
                                 op1_data(i) <= fifo_q_addr_dst(31 DOWNTO 24);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_DST + 1 =>
                                 op1_data(i) <= fifo_q_addr_dst(23 DOWNTO 16);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_DST + 2 =>
                                 op1_data(i) <= fifo_q_addr_dst(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_IP_DST + 3 =>
                                 op1_data(i) <= fifo_q_addr_dst(7 DOWNTO 0);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_PROTO =>
                                 op1_data(i) <= UDP_PROTO;
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_PORT_SRC =>
                                 op1_data(i)
                                     <= fifo_q_udp_port_src(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_PORT_SRC + 1 =>
                                 op1_data(i)
                                     <= fifo_q_udp_port_src(7 DOWNTO 0);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_PORT_DST =>
                                 op1_data(i)
                                     <= fifo_q_udp_port_dst(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_PORT_DST + 1 =>
                                 op1_data(i)
                                     <= fifo_q_udp_port_dst(7 DOWNTO 0);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_LEN =>
                                 op1_data(i) <= fifo_q_udp_len(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_LEN + 1 =>
                                 op1_data(i) <= fifo_q_udp_len(7 DOWNTO 0);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_CHK =>
                                 op1_data(i) <= fifo_q_udp_chk(15 DOWNTO 8);
+                                op1_count_var := op1_count_var + 1;
                             WHEN DATA_OUT_OFF_UDP_CHK + 1 =>
                                 op1_data(i) <= fifo_q_udp_chk(7 DOWNTO 0);
-                                op1_hdr_sent := true;
+                                op1_hdr_sent <= true;
+                                op1_count_var := op1_count_var + 1;
+                                -- Skip data processing if there is none
+                                IF 8 = UNSIGNED(fifo_q_udp_len) THEN
+                                    op1_end <= '1';
+                                    op1_data_sent <= TRUE;
+                                END IF;
                             WHEN OTHERS =>
                                 op1_valid(i) <= '0';
-                                op1_count := op1_count;
                         END CASE;
                     END LOOP;
-                ELSIF op0_fifo_data_read = '1' THEN
-                    op1_valid <= (OTHERS => '1');
-                    op1_count := op1_count + fifo_data_q_data'length;
-                    IF fifo_data_q_end = '1' THEN
-                        -- FIXME: adjust valids based on count/udp hdr
-                        op1_hdr_sent := false;
-                        op1_count := (OTHERS => '0');
+                ELSIF state = S_OUTPUT_DATA AND op0b_fifo_buffer_read = '1'
+                        AND NOT op1_data_sent THEN
+                    op1_count_var := op1_count_var
+                        + op0b_fifo_buffer_q_data'length;
+                    -- Adjust valid bits for last transfer if it does not line
+                    -- up with the bus width. -8 is for the UDP header
+                    IF op1_count_var - DATA_OUT_OFF_UDP_PAYLOAD
+                            > UNSIGNED(fifo_q_udp_len) - 8 THEN
+                        op1_valid <= n_to_valid(TO_INTEGER(
+                            width - (op1_count_var - DATA_OUT_OFF_UDP_PAYLOAD
+                            - (UNSIGNED(fifo_q_udp_len) - 8))));
+                    ELSE
+                        op1_valid <= (OTHERS => '1');
+                    END IF;
+                    IF op0b_fifo_buffer_q_end = '1' THEN
+                        -- FIXME: signal that buffered data should be kept,
+                        -- may contain future packet data
+                        op1_end <= '1';
+                        op1_hdr_sent <= FALSE;
+                        op1_data_sent <= TRUE;
+                        op1_count_var := (OTHERS => '0');
                     END IF;
                 END IF;
+                op1_count <= op1_count_var;
             END IF;
         END IF;
     END PROCESS;
+
+    -- State machine for reading from the header and buffer FIFOs. Works with
+    -- the output pipeline.
+    PROCESS(Clk)
+    BEGIN
+        IF rising_edge(Clk) THEN
+            IF Rst = '1' THEN
+                state <= S_WAIT_HDR;
+                fifo_read <= '0';
+                fifo_buffer_read <= '0';
+            ELSE
+                CASE state IS
+                    WHEN S_WAIT_HDR =>
+                        IF fifo_empty /= '1' THEN
+                            fifo_read <= '1';
+                            state <= S_WAIT_HDR_VALID;
+                        END IF;
+                    WHEN S_WAIT_HDR_VALID =>
+                        fifo_read <= '0';
+                        state <= S_OUTPUT_HDR;
+                    WHEN S_OUTPUT_HDR =>
+                        IF op1_hdr_sent THEN
+                            IF op1_data_sent THEN
+                                state <= S_WAIT_HDR;
+                            ELSE
+                                state <= S_OUTPUT_DATA;
+                                fifo_buffer_read <= '1';
+                            END IF;
+                        END IF;
+                    WHEN S_OUTPUT_DATA =>
+                        IF op1_data_sent THEN
+                            state <= S_WAIT_HDR;
+                            fifo_buffer_read <= '0';
+                        END IF;
+                    WHEN OTHERS =>
+                        state <= S_WAIT_HDR;
+                END CASE;
+            END IF;
+        END IF;
+    END PROCESS;
+
     g_data_out: FOR i IN INTEGER RANGE 0 TO op1_data'length - 1 GENERATE
         Data_out((i + 1) * 8 - 1 DOWNTO i * 8) <= op1_data(i);
     END GENERATE;
