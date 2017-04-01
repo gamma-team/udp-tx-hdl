@@ -1,7 +1,7 @@
 -- STATUS: Works for constant streaming where sinks and sources are always
 -- asserting ready. This is good enough for this project, so it is left that
 -- way for now.
--- BUG: ACKing from Out_ready is broken
+-- BUG: ACKing from Out_ready is not implemented
 -- BUG: Sink interface does not ACK properly when the output interface is not
 -- ready. It always asserts that it is ready.
 --
@@ -35,10 +35,11 @@
 LIBRARY ieee;
 USE ieee.std_logic_1164.ALL;
 USE ieee.numeric_std.ALL;
+USE ieee.math_real.ALL;
 
 ENTITY stream_packer IS
     GENERIC (
-        width : POSITIVE := 4
+        width : POSITIVE := 8
     );
     PORT (
         Clk : IN STD_LOGIC;
@@ -59,219 +60,166 @@ END ENTITY;
 ARCHITECTURE yagami OF stream_packer IS
     TYPE DATA_BUS IS ARRAY (width - 1 DOWNTO 0)
         OF STD_LOGIC_VECTOR(7 DOWNTO 0);
+
     TYPE BOOLEAN_VECTOR IS ARRAY (NATURAL RANGE <>) OF BOOLEAN;
-    TYPE STATE_STREAM IS (S_WAIT_VALID, S_WAIT_ACK, S_ACKED, S_ERR);
+
+    TYPE intermediate_reg IS RECORD
+        mask_end : INTEGER; -- constant
+        mask : STD_LOGIC_VECTOR(width - 1 DOWNTO 0); -- should be constant
+        data : DATA_BUS;
+        valid : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        last : STD_LOGIC;
+    END RECORD;
+
+    -- These help remove layers of logic
+    TYPE intermediate_regs IS ARRAY (INTEGER RANGE <>) OF intermediate_reg;
+
+    SIGNAL stage1_regs : intermediate_regs(0 TO width - 1);
 
     SIGNAL in_data_sig : DATA_BUS;
     SIGNAL in_valid_sig : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
 
     SIGNAL out_data_reg : DATA_BUS;
-    SIGNAL out_valid_reg : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
-    SIGNAL out_valid_reg_int : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
+    SIGNAL out_valid_reg : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
     SIGNAL out_last_reg : STD_LOGIC;
-    SIGNAL out_last_reg_int : STD_LOGIC;
-
-    SIGNAL buf_data : DATA_BUS;
-    SIGNAL buf_last : STD_LOGIC;
-    SIGNAL buf_valid : BOOLEAN_VECTOR(in_valid_sig'length - 1 DOWNTO 0);
-
-    SIGNAL state : STATE_STREAM;
-    SIGNAL pack_valid : BOOLEAN;
+    SIGNAL ext_out_data_reg : DATA_BUS;
+    SIGNAL ext_out_valid_reg : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+    SIGNAL ext_out_last_reg : STD_LOGIC;
 BEGIN
     g_in_sig: FOR i IN 0 TO width - 1 GENERATE
         in_data_sig(i) <= In_data((i + 1) * 8 - 1 DOWNTO i * 8);
         in_valid_sig(i) <= TRUE WHEN In_valid(i) = '1' ELSE FALSE;
     END GENERATE;
     g_out_sig: FOR i IN 0 TO width - 1 GENERATE
-        Out_data((i + 1) * 8 - 1 DOWNTO i * 8) <= out_data_reg(i);
-        Out_valid(i) <= '1' WHEN out_valid_reg(i) ELSE '0';
+        Out_data((i + 1) * 8 - 1 DOWNTO i * 8) <= ext_out_data_reg(i);
     END GENERATE;
-    Out_last <= out_last_reg;
+    Out_valid <= ext_out_valid_reg;
+    Out_last <= ext_out_last_reg;
 
     PROCESS(Clk)
-        FUNCTION all_true(bools : BOOLEAN_VECTOR(width - 1 DOWNTO 0))
-            RETURN BOOLEAN IS
-            VARIABLE b : BOOLEAN;
+        -- AND all the bits in a vector with B
+        FUNCTION vector_and(v : STD_LOGIC_VECTOR; b : STD_LOGIC)
+            RETURN STD_LOGIC_VECTOR IS
+            VARIABLE v2 : STD_LOGIC_VECTOR(v'range);
         BEGIN
-            b := true;
-            FOR i IN INTEGER RANGE bools'length - 1 DOWNTO 0 LOOP
-                b := b AND bools(i);
+            FOR i IN v2'range LOOP
+                v2(i) := b AND v(i);
             END LOOP;
-            RETURN b;
+            RETURN v2;
         END FUNCTION;
 
-        VARIABLE idx : INTEGER;
-        VARIABLE buf_valid_var
-            : BOOLEAN_VECTOR(buf_valid'length - 1 DOWNTO 0);
-        VARIABLE out_valid_var
-            : BOOLEAN_VECTOR(buf_valid'length - 1 DOWNTO 0);
-        VARIABLE out_last_var : STD_LOGIC;
-        VARIABLE inserted : BOOLEAN;
+        FUNCTION all_true(v : STD_LOGIC_VECTOR(width - 1 DOWNTO 0))
+            RETURN BOOLEAN IS
+            VARIABLE b : STD_LOGIC;
+        BEGIN
+            b := '1';
+            FOR i IN v'range LOOP
+                b := b AND v(i);
+            END LOOP;
+            RETURN b = '1';
+        END FUNCTION;
+
+        FUNCTION n_valid(v : STD_LOGIC_VECTOR)
+            RETURN INTEGER IS
+            VARIABLE count : INTEGER;
+        BEGIN
+            count := 0;
+            FOR i IN v'range LOOP
+                IF v(i) = '1' THEN
+                    count := count + 1;
+                END IF;
+            END LOOP;
+            RETURN count;
+        END FUNCTION;
+
+        FUNCTION combine(
+            valid : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            data : DATA_BUS;
+            new_data : intermediate_reg)
+            RETURN DATA_BUS IS
+            VARIABLE out_data : DATA_BUS;
+        BEGIN
+            FOR i IN out_data'range LOOP
+                out_data(i) := vector_and(data(i), valid(i))
+                    OR vector_and(new_data.data(i), new_data.valid(i));
+            END LOOP;
+            RETURN out_data;
+        END FUNCTION;
+
+        VARIABLE z : INTEGER;
+        VARIABLE n : INTEGER;
     BEGIN
+        l_stage1: FOR i IN 0 TO width - 1 LOOP
+            stage1_regs(i).mask
+                <= STD_LOGIC_VECTOR(TO_UNSIGNED(2 ** i - 1, width));
+            stage1_regs(i).mask_end <= i;
+            -- don't synthesize registers for the unused data slots
+            IF i > 0 THEN
+                stage1_regs(i).data(i - 1 DOWNTO 0)
+                    <= (OTHERS => (OTHERS => '0'));
+            END IF;
+        END LOOP;
         IF rising_edge(Clk) THEN
             IF Rstn = '0' THEN
                 out_data_reg <= (OTHERS => (OTHERS => '0'));
-                out_valid_reg <= (OTHERS => FALSE);
-                out_valid_reg_int <= (OTHERS => FALSE);
+                out_valid_reg <= (OTHERS => '0');
                 out_last_reg <= '0';
-                out_last_reg_int <= '0';
-                buf_data <= (OTHERS => (OTHERS => '0'));
-                buf_valid <= (OTHERS => FALSE);
-                buf_last <= '0';
+                ext_out_data_reg <= (OTHERS => (OTHERS => '0'));
+                ext_out_valid_reg <= (OTHERS => '0');
+                ext_out_last_reg <= '0';
                 in_ready <= '1';
-                pack_valid <= FALSE;
+                FOR i IN 0 TO width - 1 LOOP
+                    stage1_regs(i).data(width - 1
+                        --DOWNTO stage1_regs(i).mask_end)
+                        --Vivado 2016.4 doesn't realize mask_end is constant
+                        DOWNTO i)
+                        <= (OTHERS => (OTHERS => '0'));
+                    stage1_regs(i).valid <= (OTHERS => '0');
+                    stage1_regs(i).last <= '0';
+                END LOOP;
             ELSE
-                buf_valid_var := buf_valid;
-                out_valid_var := out_valid_reg_int;
-                out_last_var := out_last_reg_int;
-                IF state = S_WAIT_VALID OR state = S_ACKED THEN
-                    -- Move buffered data into output
-                    FOR i IN INTEGER RANGE 0 TO buf_valid_var'length - 1 LOOP
-                        IF buf_valid_var(i) THEN
-                            FOR j IN INTEGER RANGE 0
-                                    TO out_valid_var'length - 1 LOOP
-                                IF NOT out_valid_var(j) THEN
-                                    out_data_reg(j) <= buf_data(i);
-                                    out_valid_var(j) := TRUE;
-                                    buf_valid_var(i) := FALSE;
-                                    out_last_var := buf_last;
-                                    EXIT;
-                                END IF;
-                            END LOOP;
-                        END IF;
+                -- expand possibilities stage
+                FOR i IN 0 TO width - 1 LOOP
+                    z := 0;
+                    stage1_regs(i).valid <= (OTHERS => '0');
+                    --FOR j IN stage1_regs(i).mask_end TO width - 1 LOOP --
+                    --Vivado 2016.4 doesn't realize mask_end is constant
+                    FOR j IN i TO width - 1 LOOP
+                        FOR k IN INTEGER RANGE 1 TO in_data_sig'length LOOP
+                            stage1_regs(i).data(j) <= in_data_sig(k - 1);
+                            IF in_valid_sig(k - 1) AND k > z THEN
+                                stage1_regs(i).valid(j) <= '1';
+                                z := k;
+                                EXIT;
+                            END IF;
+                        END LOOP;
                     END LOOP;
-                    -- Buffer is always emptied
-                    buf_valid_var := (OTHERS => FALSE);
-                    -- Do not merge incoming data with buffered data if the
-                    -- buffered data is tagged as last
-                    IF buf_last = '1' THEN
-                        idx := 0;
-                        FOR i IN INTEGER RANGE 0 TO in_valid_sig'length - 1
-                                LOOP
-                            IF in_valid_sig(i) THEN
-                                buf_data(idx) <= in_data_sig(i);
-                                buf_valid_var(idx) := TRUE;
-                                idx := idx + 1;
-                            END IF;
-                        END LOOP;
-                    ELSE
-                        FOR i IN INTEGER RANGE 0 TO in_valid_sig'length - 1
-                                LOOP
-                            IF in_valid_sig(i) THEN
-                                inserted := FALSE;
-                                FOR j IN INTEGER RANGE 0
-                                        TO out_valid_var'length - 1 LOOP
-                                    IF NOT out_valid_var(j) THEN
-                                        out_data_reg(j) <= in_data_sig(i);
-                                        out_valid_var(j) := TRUE;
-                                        inserted := TRUE;
-                                        out_last_var := In_last;
-                                        EXIT;
-                                    END IF;
-                                END LOOP;
-                                IF NOT inserted THEN
-                                    FOR j IN INTEGER RANGE 0
-                                            TO buf_valid_var'length - 1 LOOP
-                                        IF NOT buf_valid_var(j) THEN
-                                            buf_data(j) <= in_data_sig(i);
-                                            buf_valid_var(j) := TRUE;
-                                            -- Last signal asserted with the
-                                            -- last pieces of that data,
-                                            buf_last <= In_last;
-                                            out_last_var := '0';
-                                            EXIT;
-                                        END IF;
-                                    END LOOP;
-                                END IF;
-                            END IF;
-                        END LOOP;
-                    END IF;
-                    buf_valid <= buf_valid_var;
-                    out_valid_reg_int <= out_valid_var;
-                    out_last_reg_int <= out_last_var;
-                    -- ready for output
-                    IF all_true(out_valid_var) OR out_last_var = '1' THEN
-                        -- externally visible signals
-                        out_valid_reg <= out_valid_var;
-                        out_last_reg <= out_last_var;
-                        pack_valid <= TRUE;
-                        -- flush that data out next run
-                        out_valid_reg_int <= (OTHERS => FALSE);
-                        out_last_reg_int <= '0';
-                    ELSE
-                        pack_valid <= FALSE;
-                        out_valid_reg <= (OTHERS => FALSE);
-                        out_last_reg <= '0';
-                    END IF;
---                ELSE
---                    pack_valid <= FALSE;
---                    out_valid_reg <= (OTHERS => FALSE);
---                    out_last_reg <= '0';
+                    stage1_regs(i).last <= In_last;
+                END LOOP;
+
+                -- pre-output stage
+                IF all_true(out_valid_reg) OR out_last_reg = '1' THEN
+                    out_data_reg <= stage1_regs(0).data;
+                    out_valid_reg <= stage1_regs(0).valid;
+                    out_last_reg <= stage1_regs(0).last;
+                ELSE
+                    n := n_valid(out_valid_reg);
+                    out_data_reg <=
+                        combine(out_valid_reg, out_data_reg, stage1_regs(n));
+                    out_valid_reg <= stage1_regs(n).valid OR out_valid_reg;
+                    out_last_reg <= stage1_regs(n).last;
+                END IF;
+
+                -- output stage
+                ext_out_data_reg <= out_data_reg;
+                IF all_true(out_valid_reg) OR out_last_reg = '1' THEN
+                    ext_out_valid_reg <= out_valid_reg;
+                    ext_out_last_reg <= out_last_reg;
+                ELSE
+                    ext_out_valid_reg <= (OTHERS => '0');
+                    ext_out_last_reg <= out_last_reg;
                 END IF;
             END IF;
         END IF;
     END PROCESS;
-
-    PROCESS(Clk)
-    BEGIN
-        IF rising_edge(Clk) THEN
-            IF Rstn = '0' THEN
-                state <= S_WAIT_VALID;
-            ELSE
-                CASE state IS
-                    -- Waiting for output data to become valid
-                    WHEN S_WAIT_VALID =>
-                        IF pack_valid THEN
-                            -- Skip to ACKed state if sink is already ready
-                            IF out_ready = '1' THEN
-                                state <= S_ACKED;
-                            ELSE
-                                state <= S_WAIT_ACK;
-                            END IF;
-                        END IF;
-                    -- Output data valid, waiting for ACK
-                    WHEN S_WAIT_ACK =>
-                        IF out_ready = '1' THEN
-                            state <= S_ACKED;
-                        END IF;
-                    WHEN S_ACKED =>
-                        IF pack_valid THEN
-                            IF out_ready = '1' THEN
-                                state <= S_ACKED;
-                            ELSE
-                                state <= S_WAIT_ACK;
-                            END IF;
-                        ELSE
-                            state <= S_WAIT_VALID;
-                        END IF;
-                    -- for debug in simulation
-                    WHEN S_ERR =>
-                        state <= S_WAIT_VALID;
-                    WHEN OTHERS =>
-                        state <= S_ERR;
-                END CASE;
-            END IF;
-        END IF;
-    END PROCESS;
-
---    -- Test code
---    PROCESS(Clk)
---    BEGIN
---        IF rising_edge(Clk) THEN
---            IF Rstn = '0' THEN
---                pack_valid <= FALSE;
---            ELSE
---                IF state = S_WAIT_VALID OR state = S_ACKED THEN
---                    IF In_valid /= x"00" THEN
---                        Out_data <= In_data;
---                        Out_valid <= In_valid;
---                        Out_last <= In_last;
---                        pack_valid <= TRUE;
---                    ELSE
---                        pack_valid <= FALSE;
---                        Out_valid <= (OTHERS => '0');
---                        Out_last <= '0';
---                    END IF;
---                END IF;
---            END IF;
 END ARCHITECTURE;
