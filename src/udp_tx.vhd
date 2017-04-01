@@ -778,8 +778,10 @@ BEGIN
             VARIABLE o : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
         BEGIN
             o := (OTHERS => '0');
-            FOR i IN 0 TO n - 1 LOOP
-                o(i) := '1';
+            FOR i IN 0 TO o'length - 1 LOOP
+                IF i + 1 <= n THEN
+                    o(i) := '1';
+                END IF;
             END LOOP;
             RETURN o;
         END FUNCTION;
