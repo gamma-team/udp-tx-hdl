@@ -356,6 +356,16 @@ BEGIN
             END LOOP;
             RETURN b;
         END FUNCTION;
+        FUNCTION all_false(bools : BOOLEAN_VECTOR)
+            RETURN BOOLEAN IS
+            VARIABLE b : BOOLEAN;
+        BEGIN
+            b := false;
+            FOR i IN bools'range LOOP
+                b := b OR bools(i);
+            END LOOP;
+            RETURN NOT b;
+        END FUNCTION;
         FUNCTION n_valid(v : STD_LOGIC_VECTOR(width - 1 DOWNTO 0))
             RETURN INTEGER IS
             VARIABLE count : INTEGER;
@@ -751,7 +761,9 @@ BEGIN
                     IF p5_data_out_end = '1' THEN
                         p6_started <= FALSE;
                     END IF;
-                    p6_fifo_buffer_we <= '1';
+                    IF NOT all_false(p5_data_out_valid) THEN
+                        p6_fifo_buffer_we <= '1';
+                    END IF;
                 END IF;
             END IF;
         END IF;
@@ -917,6 +929,10 @@ BEGIN
                         out_data_reg(6) <= fifo_q_udp_len(7 DOWNTO 0);
                         out_data_reg(7) <= fifo_q_udp_chk(15 DOWNTO 8);
                         out_valid_reg <= (OTHERS => '1');
+                        -- when no data, tell the FSM to skip data phase
+                        IF UNSIGNED(fifo_q_udp_len) <= 8 THEN
+                            out_data_sent <= TRUE;
+                        END IF;
                     WHEN S_OUTPUT_HDR2 =>
                         out_data_reg(0) <= fifo_q_udp_chk(7 DOWNTO 0);
                         out_valid_reg(0) <= '1';
@@ -924,6 +940,8 @@ BEGIN
                         out_data_count := (OTHERS => '0');
                         IF UNSIGNED(fifo_q_udp_len) > 8 THEN
                             fifo_buffer_read <= '1';
+                        ELSE
+                            out_end_reg <= '1';
                         END IF;
                     WHEN S_OUTPUT_DATA =>
                         out_data_reg <= fifo_buffer_q_data;
@@ -943,6 +961,12 @@ BEGIN
                         IF fifo_buffer_q_end = '1' THEN
                             out_end_reg <= '1';
                             out_data_sent <= TRUE;
+                        END IF;
+                        -- FIXME: Until the state machine is refined, do this
+                        -- to prevent end from being asserted for an extra
+                        -- cycle.
+                        IF out_data_sent THEN
+                            out_end_reg <= '0';
                         END IF;
                     WHEN OTHERS =>
                 END CASE;
@@ -974,6 +998,9 @@ BEGIN
                         state <= S_OUTPUT_HDR2;
                     WHEN S_OUTPUT_HDR2 =>
                         state <= S_OUTPUT_DATA;
+                        IF out_data_sent THEN
+                            state <= S_WAIT_HDR;
+                        END IF;
                     WHEN S_OUTPUT_DATA =>
                         IF out_data_sent THEN
                             state <= S_WAIT_HDR;
