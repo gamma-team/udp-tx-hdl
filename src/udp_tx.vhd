@@ -175,27 +175,44 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL p1_data_in_start : STD_LOGIC;
     SIGNAL p1_data_in_end : STD_LOGIC;
     SIGNAL p1_data_in_err : STD_LOGIC;
+    SIGNAL p1_len_read : UNSIGNED(p0_len_read'range);
     SIGNAL p1_addr_src : STD_LOGIC_VECTOR(31 DOWNTO 0);
     SIGNAL p1_addr_dst : STD_LOGIC_VECTOR(31 DOWNTO 0);
     SIGNAL p1_udp_port_src : STD_LOGIC_VECTOR(15 DOWNTO 0);
     SIGNAL p1_udp_port_dst : STD_LOGIC_VECTOR(15 DOWNTO 0);
     SIGNAL p1_chk_accum : UNSIGNED(31 DOWNTO 0);
     SIGNAL p1_udp_len : UNSIGNED(15 DOWNTO 0);
+    SIGNAL p1_len_ge_data_in_off_udp_payload : BOOLEAN;
 
-    SIGNAL p2_data_in : DATA_BUS;
-    SIGNAL p2_data_in_valid
-        : STD_LOGIC_VECTOR(p2_data_in'length - 1 DOWNTO 0);
-    SIGNAL p2_data_in_start : STD_LOGIC;
-    SIGNAL p2_data_in_end : STD_LOGIC;
-    SIGNAL p2_data_in_err : STD_LOGIC;
-    SIGNAL p2_addr_src : STD_LOGIC_VECTOR(31 DOWNTO 0);
-    SIGNAL p2_addr_dst : STD_LOGIC_VECTOR(31 DOWNTO 0);
-    SIGNAL p2_udp_port_src : STD_LOGIC_VECTOR(15 DOWNTO 0);
-    SIGNAL p2_udp_port_dst : STD_LOGIC_VECTOR(15 DOWNTO 0);
-    SIGNAL p2_udp_len : UNSIGNED(15 DOWNTO 0);
-    SIGNAL p2_chk_accum : UNSIGNED(31 DOWNTO 0);
-    SIGNAL p2_chk_addend : UNSIGNED(15 DOWNTO 0);
-    SIGNAL p2_internal_off : UNSIGNED(COUNTER_WIDTH - 1 DOWNTO 0);
+    SIGNAL p2a_data_in : DATA_BUS;
+    SIGNAL p2a_data_in_valid
+        : STD_LOGIC_VECTOR(p2a_data_in'length - 1 DOWNTO 0);
+    SIGNAL p2a_data_in_start : STD_LOGIC;
+    SIGNAL p2a_data_in_end : STD_LOGIC;
+    SIGNAL p2a_data_in_err : STD_LOGIC;
+    SIGNAL p2a_addr_src : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    SIGNAL p2a_addr_dst : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    SIGNAL p2a_udp_port_src : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    SIGNAL p2a_udp_port_dst : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    SIGNAL p2a_udp_len : UNSIGNED(15 DOWNTO 0);
+    SIGNAL p2a_chk_accum : UNSIGNED(31 DOWNTO 0);
+    SIGNAL p2a_chk_addend : UNSIGNED(15 DOWNTO 0);
+    SIGNAL p2a_internal_off : UNSIGNED(COUNTER_WIDTH - 1 DOWNTO 0);
+    SIGNAL p2a_len_ge_data_in_off_udp_payload : BOOLEAN;
+    SIGNAL p2a_p1_chk_accum : UNSIGNED(31 DOWNTO 0);
+
+    SIGNAL p2b_data_in : DATA_BUS;
+    SIGNAL p2b_data_in_valid
+        : STD_LOGIC_VECTOR(p2b_data_in'length - 1 DOWNTO 0);
+    SIGNAL p2b_data_in_start : STD_LOGIC;
+    SIGNAL p2b_data_in_end : STD_LOGIC;
+    SIGNAL p2b_data_in_err : STD_LOGIC;
+    SIGNAL p2b_addr_src : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    SIGNAL p2b_addr_dst : STD_LOGIC_VECTOR(31 DOWNTO 0);
+    SIGNAL p2b_udp_port_src : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    SIGNAL p2b_udp_port_dst : STD_LOGIC_VECTOR(15 DOWNTO 0);
+    SIGNAL p2b_udp_len : UNSIGNED(15 DOWNTO 0);
+    SIGNAL p2b_chk_accum : UNSIGNED(31 DOWNTO 0);
 
     SIGNAL p3_data_in : DATA_BUS;
     SIGNAL p3_data_in_valid
@@ -355,13 +372,18 @@ BEGIN
         VARIABLE p0_len_read_var : UNSIGNED(p0_len_read'length - 1 DOWNTO 0);
         VARIABLE p1_chk_accum_var
             : UNSIGNED(p1_chk_accum'length - 1 DOWNTO 0);
-        VARIABLE p2_internal_off_var
-            : UNSIGNED(p2_internal_off'length - 1 DOWNTO 0);
-        VARIABLE p2_chk_addend_var
-            : UNSIGNED(p2_chk_addend'length - 1 DOWNTO 0);
-        VARIABLE p2_chk_accum_var
-            : UNSIGNED(p2_chk_accum'length - 1 DOWNTO 0);
+        VARIABLE p2a_internal_off_var
+            : UNSIGNED(p2a_internal_off'length - 1 DOWNTO 0);
+        VARIABLE p2a_chk_addend_var
+            : UNSIGNED(p2a_chk_addend'length - 1 DOWNTO 0);
+        VARIABLE p2a_chk_accum_var
+            : UNSIGNED(p2a_chk_accum'length - 1 DOWNTO 0);
+        VARIABLE p2b_chk_addend_var
+            : UNSIGNED(p2a_chk_addend'length - 1 DOWNTO 0);
+        VARIABLE p2b_chk_accum_var
+            : UNSIGNED(p2b_chk_accum'length - 1 DOWNTO 0);
         VARIABLE p4_j : NATURAL;
+        VARIABLE p3_udp_chk_var : UNSIGNED(p3_udp_chk'range);
     BEGIN
         IF rising_edge(Clk) THEN
             IF Rst = '1' THEN
@@ -380,6 +402,7 @@ BEGIN
                 p0_udp_port_dst <= (OTHERS => '0');
                 p0_started <= false;
                 p0_hdr_done <= false;
+                p0_len_read <= (OTHERS => '0');
 
                 p1_data_in <= (OTHERS => (OTHERS => '0'));
                 p1_data_in_valid <= (OTHERS => '0');
@@ -392,20 +415,36 @@ BEGIN
                 p1_udp_port_dst <= (OTHERS => '0');
                 p1_udp_len <= (OTHERS => '0');
                 p1_chk_accum <= (OTHERS => '0');
+                p1_len_read <= (OTHERS => '0');
+                p1_len_ge_data_in_off_udp_payload  <= FALSE;
 
-                p2_data_in <= (OTHERS => (OTHERS => '0'));
-                p2_data_in_valid <= (OTHERS => '0');
-                p2_data_in_start <= '0';
-                p2_data_in_end <= '0';
-                p2_data_in_err <= '0';
-                p2_addr_src <= (OTHERS => '0');
-                p2_addr_dst <= (OTHERS => '0');
-                p2_udp_port_src <= (OTHERS => '0');
-                p2_udp_port_dst <= (OTHERS => '0');
-                p2_udp_len <= (OTHERS => '0');
-                p2_chk_accum <= (OTHERS => '0');
-                p2_chk_addend <= (OTHERS => '0');
-                p2_internal_off <= (OTHERS => '0');
+                p2a_data_in <= (OTHERS => (OTHERS => '0'));
+                p2a_data_in_valid <= (OTHERS => '0');
+                p2a_data_in_start <= '0';
+                p2a_data_in_end <= '0';
+                p2a_data_in_err <= '0';
+                p2a_addr_src <= (OTHERS => '0');
+                p2a_addr_dst <= (OTHERS => '0');
+                p2a_udp_port_src <= (OTHERS => '0');
+                p2a_udp_port_dst <= (OTHERS => '0');
+                p2a_udp_len <= (OTHERS => '0');
+                p2a_chk_accum <= (OTHERS => '0');
+                p2a_chk_addend <= (OTHERS => '0');
+                p2a_internal_off <= (OTHERS => '0');
+                p2a_len_ge_data_in_off_udp_payload <= FALSE;
+                p2a_p1_chk_accum <= (OTHERS => '0');
+
+                p2b_data_in <= (OTHERS => (OTHERS => '0'));
+                p2b_data_in_valid <= (OTHERS => '0');
+                p2b_data_in_start <= '0';
+                p2b_data_in_end <= '0';
+                p2b_data_in_err <= '0';
+                p2b_addr_src <= (OTHERS => '0');
+                p2b_addr_dst <= (OTHERS => '0');
+                p2b_udp_port_src <= (OTHERS => '0');
+                p2b_udp_port_dst <= (OTHERS => '0');
+                p2b_udp_len <= (OTHERS => '0');
+                p2b_chk_accum <= (OTHERS => '0');
 
                 p3_data_in <= (OTHERS => (OTHERS => '0'));
                 p3_data_in_valid <= (OTHERS => '0');
@@ -511,6 +550,7 @@ BEGIN
                 p1_addr_dst <= p0_addr_dst;
                 p1_udp_port_src <= p0_udp_port_src;
                 p1_udp_port_dst <= p0_udp_port_dst;
+                p1_len_read <= p0_len_read;
 
                 -- The checksum field is 0 when calculating to fill the
                 -- checksum field, so it is omitted.
@@ -521,14 +561,12 @@ BEGIN
                 END IF;
                 IF p0_addr_src_valid THEN
                     p1_chk_accum_var := p1_chk_accum_var
-                        + UNSIGNED(p0_addr_src(15 DOWNTO 0));
-                    p1_chk_accum_var := p1_chk_accum_var
+                        + UNSIGNED(p0_addr_src(15 DOWNTO 0))
                         + UNSIGNED(p0_addr_src(31 DOWNTO 16));
                 END IF;
                 IF p0_addr_dst_valid THEN
                     p1_chk_accum_var := p1_chk_accum_var
-                        + UNSIGNED(p0_addr_dst(15 DOWNTO 0));
-                    p1_chk_accum_var := p1_chk_accum_var
+                        + UNSIGNED(p0_addr_dst(15 DOWNTO 0))
                         + UNSIGNED(p0_addr_dst(31 DOWNTO 16));
                 END IF;
                 IF p0_udp_port_src_valid THEN
@@ -542,8 +580,9 @@ BEGIN
                 -- Length intentionally added twice, it is part of the pseudo
                 -- and real UDP header.
                 IF p0_data_in_end = '1' THEN
-                    p1_chk_accum_var := p1_chk_accum_var + p0_len_read;
-                    p1_chk_accum_var := p1_chk_accum_var + p0_len_read;
+                    p1_chk_accum_var := p1_chk_accum_var
+                        + (p0_len_read - DATA_IN_OFF_UDP_PAYLOAD + 8)
+                        + (p0_len_read - DATA_IN_OFF_UDP_PAYLOAD + 8);
                 END IF;
                 p1_chk_accum <= p1_chk_accum_var;
                 -- Calculate length for UDP header (subtract input stream
@@ -551,73 +590,110 @@ BEGIN
                 p1_udp_len <=
                     resize(p0_len_read - DATA_IN_OFF_UDP_PAYLOAD + 8,
                     p1_udp_len'length);
+                IF p0_len_read >= DATA_IN_OFF_UDP_PAYLOAD THEN
+                    p1_len_ge_data_in_off_udp_payload <= TRUE;
+                ELSE
+                    p1_len_ge_data_in_off_udp_payload <= FALSE;
+                END IF;
 
                 --
-                -- Stage 2: Normal checksumming
+                -- Stage 2a: Normal checksumming
                 --
-                p2_data_in <= p1_data_in;
-                p2_data_in_valid <= p1_data_in_valid;
-                p2_data_in_start <= p1_data_in_start;
-                p2_data_in_end <= p1_data_in_end;
-                p2_data_in_err <= p1_data_in_err;
-                p2_addr_src <= p1_addr_src;
-                p2_addr_dst <= p1_addr_dst;
-                p2_udp_port_src <= p1_udp_port_src;
-                p2_udp_port_dst <= p1_udp_port_dst;
-                p2_udp_len <= p1_udp_len;
+                p2a_data_in <= p1_data_in;
+                p2a_data_in_valid <= p1_data_in_valid;
+                p2a_data_in_start <= p1_data_in_start;
+                p2a_data_in_end <= p1_data_in_end;
+                p2a_data_in_err <= p1_data_in_err;
+                p2a_addr_src <= p1_addr_src;
+                p2a_addr_dst <= p1_addr_dst;
+                p2a_udp_port_src <= p1_udp_port_src;
+                p2a_udp_port_dst <= p1_udp_port_dst;
+                p2a_udp_len <= p1_udp_len;
+                p2a_len_ge_data_in_off_udp_payload
+                    <= p1_len_ge_data_in_off_udp_payload;
+                p2a_p1_chk_accum <= p1_chk_accum;
 
-                p2_internal_off_var := p2_internal_off;
-                p2_chk_addend_var := p2_chk_addend;
-                p2_chk_accum_var := p1_chk_accum;
+                p2a_internal_off_var := p2a_internal_off;
+                p2a_chk_addend_var := p2a_chk_addend;
+                p2a_chk_accum_var := p2a_chk_accum;
                 IF p1_data_in_start = '1' THEN
-                    p2_internal_off_var := (OTHERS => '0');
-                    p2_chk_addend_var := (OTHERS => '0');
-                    p2_chk_accum_var := (OTHERS => '0');
+                    p2a_internal_off_var := (OTHERS => '0');
+                    p2a_chk_addend_var := (OTHERS => '0');
+                    p2a_chk_accum_var := (OTHERS => '0');
                 END IF;
                 -- Note: If this is too slow, split into stages that handle
                 -- ranges of byte enables
-                FOR i IN 0 TO width - 1 LOOP
-                    IF p1_data_in_valid(i) = '1' THEN
-                        IF 0 = p2_internal_off_var MOD 2 THEN
-                            p2_chk_addend_var(7 DOWNTO 0)
-                                := UNSIGNED(p1_data_in(i));
-                        ELSE
-                            p2_chk_addend_var(15 DOWNTO 8)
-                                := UNSIGNED(p1_data_in(i));
-                            p2_chk_accum_var := p2_chk_accum_var
-                                + p2_chk_addend_var;
+                IF p1_len_ge_data_in_off_udp_payload THEN
+                    FOR i IN 0 TO width - 1 LOOP
+                        IF p1_data_in_valid(i) = '1' THEN
+                            IF 0 = p2a_internal_off_var MOD 2 THEN
+                                p2a_chk_addend_var(15 DOWNTO 8)
+                                    := UNSIGNED(p1_data_in(i));
+                            ELSE
+                                p2a_chk_addend_var(7 DOWNTO 0)
+                                    := UNSIGNED(p1_data_in(i));
+                                p2a_chk_accum_var := p2a_chk_accum_var
+                                    + p2a_chk_addend_var;
+                            END IF;
+                            p2a_internal_off_var := p2a_internal_off_var + 1;
                         END IF;
-                        p2_internal_off_var := p2_internal_off_var + 1;
-                    END IF;
-                END LOOP;
-                IF p1_data_in_end = '1' THEN
-                    -- account for non-word-aligned data length
-                    IF 1 = p2_internal_off_var MOD 2 THEN
-                        p2_chk_addend_var(15 DOWNTO 8) := (OTHERS => '0');
-                        p2_chk_accum_var := p2_chk_accum_var
-                            + p2_chk_addend_var;
+                    END LOOP;
+                END IF;
+                p2a_chk_accum <= p2a_chk_accum_var;
+                p2a_chk_addend <= p2a_chk_addend_var;
+                p2a_internal_off <= p2a_internal_off_var;
+
+                --
+                -- Stage 2b: Normal checksumming
+                --
+                p2b_data_in <= p2a_data_in;
+                p2b_data_in_valid <= p2a_data_in_valid;
+                p2b_data_in_start <= p2a_data_in_start;
+                p2b_data_in_end <= p2a_data_in_end;
+                p2b_data_in_err <= p2a_data_in_err;
+                p2b_addr_src <= p2a_addr_src;
+                p2b_addr_dst <= p2a_addr_dst;
+                p2b_udp_port_src <= p2a_udp_port_src;
+                p2b_udp_port_dst <= p2a_udp_port_dst;
+                p2b_udp_len <= p2a_udp_len;
+
+                p2b_chk_addend_var := p2a_chk_addend;
+                p2b_chk_accum_var := p2a_chk_accum;
+                IF p2a_len_ge_data_in_off_udp_payload THEN
+                    IF p2a_data_in_end = '1' THEN
+                        -- account for non-word-aligned data length
+                        IF 1 = p2a_internal_off MOD 2 THEN
+                            p2b_chk_addend_var(7 DOWNTO 0) := (OTHERS => '0');
+                            p2b_chk_accum_var
+                                := p2b_chk_accum_var + p2b_chk_addend_var;
+                        END IF;
+                        -- add the accumulation from header fields
+                        p2b_chk_accum_var
+                            := p2b_chk_accum_var + p2a_p1_chk_accum;
                     END IF;
                 END IF;
-                p2_chk_accum <= p2_chk_accum_var;
-                p2_chk_addend <= p2_chk_addend_var;
-                p2_internal_off <= p2_internal_off_var;
+                p2b_chk_accum <= p2b_chk_accum_var;
 
                 --
                 -- Stage 3: Finish checksum
                 --
-                p3_data_in <= p2_data_in;
-                p3_data_in_valid <= p2_data_in_valid;
-                p3_data_in_start <= p2_data_in_start;
-                p3_data_in_end <= p2_data_in_end;
-                p3_data_in_err <= p2_data_in_err;
-                p3_addr_src <= p2_addr_src;
-                p3_addr_dst <= p2_addr_dst;
-                p3_udp_port_src <= p2_udp_port_src;
-                p3_udp_port_dst <= p2_udp_port_dst;
-                p3_udp_len <= p2_udp_len;
+                p3_data_in <= p2b_data_in;
+                p3_data_in_valid <= p2b_data_in_valid;
+                p3_data_in_start <= p2b_data_in_start;
+                p3_data_in_end <= p2b_data_in_end;
+                p3_data_in_err <= p2b_data_in_err;
+                p3_addr_src <= p2b_addr_src;
+                p3_addr_dst <= p2b_addr_dst;
+                p3_udp_port_src <= p2b_udp_port_src;
+                p3_udp_port_dst <= p2b_udp_port_dst;
+                p3_udp_len <= p2b_udp_len;
 
-                p3_udp_chk <= p2_chk_accum(31 DOWNTO 16)
-                    + p2_chk_accum(15 DOWNTO 0);
+                p3_udp_chk_var := NOT (p2b_chk_accum(31 DOWNTO 16)
+                    + p2b_chk_accum(15 DOWNTO 0));
+                IF p3_udp_chk_var = 0 THEN
+                    p3_udp_chk_var := (OTHERS => '1');
+                END IF;
+                p3_udp_chk <= p3_udp_chk_var;
 
                 --
                 -- Stage 4: Prepare data for FIFO buffer step 1 (compact data,
