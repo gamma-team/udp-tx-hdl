@@ -506,10 +506,6 @@ BEGIN
                     p0_data_in_start <= '1';
                     p0_len_read_var := (OTHERS => '0');
                 END IF;
-                IF packed_data_in_end = '1' THEN
-                    p0_started <= false;
-                    p0_hdr_done <= false;
-                END IF;
 
                 p0_addr_src_valid <= false;
                 p0_addr_dst_valid <= false;
@@ -542,6 +538,10 @@ BEGIN
                         p0_data_in_valid(3 DOWNTO 0) <= (OTHERS => '0');
                         p0_hdr_done <= true;
                     END IF;
+                END IF;
+                IF packed_data_in_end = '1' THEN
+                    p0_started <= false;
+                    p0_hdr_done <= false;
                 END IF;
                 p0_len_read_var := p0_len_read_var
                     + TO_UNSIGNED(n_valid(packed_data_in_valid),
@@ -828,9 +828,9 @@ BEGIN
             TO fifo_buffer_q_data'length - 1 GENERATE
         fifo_buffer_q_data(i) <= fifo_buffer_q((i + 1) * 8 - 1 DOWNTO i * 8);
     END GENERATE;
-    fifo_buffer_q_start <= fifo_buffer_q(fifo_buffer_q_data'length - 1);
-    fifo_buffer_q_end <= fifo_buffer_q(fifo_buffer_q_data'length - 2);
-    fifo_buffer_q_err <= fifo_buffer_q(fifo_buffer_q_data'length - 3);
+    fifo_buffer_q_start <= fifo_buffer_q(fifo_buffer_q'length - 1);
+    fifo_buffer_q_end <= fifo_buffer_q(fifo_buffer_q'length - 2);
+    fifo_buffer_q_err <= fifo_buffer_q(fifo_buffer_q'length - 3);
 
     -- FIFO for forwarding header information
     fifo_d <= STD_LOGIC_VECTOR(p4_udp_chk) & STD_LOGIC_VECTOR(p4_udp_len)
@@ -919,6 +919,7 @@ BEGIN
                         out_data_reg(7) <= fifo_q_addr_dst(7 DOWNTO 0);
                         out_valid_reg <= (OTHERS => '1');
                         out_start_reg <= '1';
+                        out_data_sent <= FALSE;
                     WHEN S_OUTPUT_HDR1 =>
                         out_data_reg(0) <= UDP_PROTO;
                         out_data_reg(1) <= fifo_q_udp_port_src(15 DOWNTO 8);
