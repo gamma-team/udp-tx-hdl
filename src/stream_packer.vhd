@@ -46,12 +46,14 @@ ENTITY stream_packer IS
         Rstn : IN STD_LOGIC;
 
         In_data : IN STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
-        In_valid : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        In_valid : IN STD_LOGIC;
+        In_keep : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
         In_last : IN STD_LOGIC;
         In_ready : OUT STD_LOGIC;
 
         Out_data : OUT STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
-        Out_valid : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        Out_valid : OUT STD_LOGIC;
+        Out_keep : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
         Out_last : OUT STD_LOGIC;
         Out_ready : IN STD_LOGIC
     );
@@ -67,7 +69,7 @@ ARCHITECTURE yagami OF stream_packer IS
         mask_end : INTEGER; -- constant
         mask : STD_LOGIC_VECTOR(width - 1 DOWNTO 0); -- should be constant
         data : DATA_BUS;
-        valid : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        keep : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
         last : STD_LOGIC;
     END RECORD;
 
@@ -75,26 +77,33 @@ ARCHITECTURE yagami OF stream_packer IS
     TYPE intermediate_regs IS ARRAY (INTEGER RANGE <>) OF intermediate_reg;
 
     SIGNAL stage1_regs : intermediate_regs(0 TO width - 1);
+    SIGNAL stage1_in_data : DATA_BUS;
+    SIGNAL stage1_in_keep : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
+    SIGNAL stage1_in_last : STD_LOGIC;
+
+    SIGNAL stage2_regs : intermediate_regs(0 TO width - 1);
+    SIGNAL stage2_ovf_regs : intermediate_regs(0 TO width - 1);
+
+    SIGNAL out_reg : intermediate_reg;
+    SIGNAL out_ovf_reg : intermediate_reg;
 
     SIGNAL in_data_sig : DATA_BUS;
-    SIGNAL in_valid_sig : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
+    SIGNAL in_keep_sig : BOOLEAN_VECTOR(width - 1 DOWNTO 0);
 
-    SIGNAL out_data_reg : DATA_BUS;
-    SIGNAL out_valid_reg : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
-    SIGNAL out_last_reg : STD_LOGIC;
-    SIGNAL ext_out_data_reg : DATA_BUS;
-    SIGNAL ext_out_valid_reg : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
-    SIGNAL ext_out_last_reg : STD_LOGIC;
+    SIGNAL ext_out_reg : intermediate_reg;
+    SIGNAL ext_out_reg_valid : STD_LOGIC;
 BEGIN
     g_in_sig: FOR i IN 0 TO width - 1 GENERATE
         in_data_sig(i) <= In_data((i + 1) * 8 - 1 DOWNTO i * 8);
-        in_valid_sig(i) <= TRUE WHEN In_valid(i) = '1' ELSE FALSE;
+        in_keep_sig(i) <= TRUE WHEN In_keep(i) = '1' AND In_valid = '1'
+            ELSE FALSE;
     END GENERATE;
     g_out_sig: FOR i IN 0 TO width - 1 GENERATE
-        Out_data((i + 1) * 8 - 1 DOWNTO i * 8) <= ext_out_data_reg(i);
+        Out_data((i + 1) * 8 - 1 DOWNTO i * 8) <= ext_out_reg.data(i);
     END GENERATE;
-    Out_valid <= ext_out_valid_reg;
-    Out_last <= ext_out_last_reg;
+    Out_keep <= ext_out_reg.keep;
+    Out_last <= ext_out_reg.last;
+    Out_valid <= ext_out_reg_valid;
 
     PROCESS(Clk)
         -- AND all the bits in a vector with B
@@ -106,6 +115,17 @@ BEGIN
                 v2(i) := b AND v(i);
             END LOOP;
             RETURN v2;
+        END FUNCTION;
+
+        FUNCTION all_false(v : STD_LOGIC_VECTOR(width - 1 DOWNTO 0))
+            RETURN BOOLEAN IS
+            VARIABLE b : STD_LOGIC;
+        BEGIN
+            b := '0';
+            FOR i IN v'range LOOP
+                b := b OR v(i);
+            END LOOP;
+            RETURN b = '0';
         END FUNCTION;
 
         FUNCTION all_true(v : STD_LOGIC_VECTOR(width - 1 DOWNTO 0))
@@ -132,92 +152,201 @@ BEGIN
             RETURN count;
         END FUNCTION;
 
-        FUNCTION combine(
-            valid : STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
-            data : DATA_BUS;
+        -- Combine two intermediate_reg that do not overlap
+        FUNCTION combine_aligned(
+            old_data : intermediate_reg;
             new_data : intermediate_reg)
-            RETURN DATA_BUS IS
-            VARIABLE out_data : DATA_BUS;
+            RETURN intermediate_reg IS
+            VARIABLE out_data : intermediate_reg;
         BEGIN
-            FOR i IN out_data'range LOOP
-                out_data(i) := vector_and(data(i), valid(i))
-                    OR vector_and(new_data.data(i), new_data.valid(i));
+            FOR i IN out_data.data'range LOOP
+                out_data.data(i) :=
+                    vector_and(old_data.data(i), old_data.keep(i))
+                    OR vector_and(new_data.data(i), new_data.keep(i));
             END LOOP;
+            out_data.keep := old_data.keep OR new_data.keep;
+            out_data.last := new_data.last;
             RETURN out_data;
         END FUNCTION;
 
-        VARIABLE z : INTEGER;
+        VARIABLE out_reg_var : intermediate_reg;
+        -- FIXME: extra bit for testing
+        VARIABLE z : UNSIGNED(NATURAL(CEIL(LOG2(REAL(width)))) DOWNTO 0);
         VARIABLE n : INTEGER;
+        VARIABLE kept_byte_n : INTEGER;
     BEGIN
         l_stage1: FOR i IN 0 TO width - 1 LOOP
             stage1_regs(i).mask
                 <= STD_LOGIC_VECTOR(TO_UNSIGNED(2 ** i - 1, width));
+            stage2_regs(i).mask
+                <= STD_LOGIC_VECTOR(TO_UNSIGNED(2 ** i - 1, width));
             stage1_regs(i).mask_end <= i;
+            stage2_regs(i).mask_end <= i;
             -- don't synthesize registers for the unused data slots
             IF i > 0 THEN
                 stage1_regs(i).data(i - 1 DOWNTO 0)
                     <= (OTHERS => (OTHERS => '0'));
+                stage2_regs(i).data(i - 1 DOWNTO 0)
+                    <= (OTHERS => (OTHERS => '0'));
             END IF;
         END LOOP;
+        -- Not used in the out_reg
+        out_reg.mask_end <= 0;
+        out_reg.mask <= (OTHERS => '0');
+        out_ovf_reg.mask_end <= 0;
+        out_ovf_reg.mask <= (OTHERS => '0');
         IF rising_edge(Clk) THEN
             IF Rstn = '0' THEN
-                out_data_reg <= (OTHERS => (OTHERS => '0'));
-                out_valid_reg <= (OTHERS => '0');
-                out_last_reg <= '0';
-                ext_out_data_reg <= (OTHERS => (OTHERS => '0'));
-                ext_out_valid_reg <= (OTHERS => '0');
-                ext_out_last_reg <= '0';
+                out_ovf_reg.data <= (OTHERS => (OTHERS => '0'));
+                out_ovf_reg.keep <= (OTHERS => '0');
+                out_ovf_reg.last <= '0';
+                out_reg.data <= (OTHERS => (OTHERS => '0'));
+                out_reg.keep <= (OTHERS => '0');
+                out_reg.last <= '0';
+                ext_out_reg.data <= (OTHERS => (OTHERS => '0'));
+                ext_out_reg.keep <= (OTHERS => '0');
+                ext_out_reg_valid <= '0';
+                ext_out_reg.last <= '0';
                 in_ready <= '1';
+                stage1_in_data <= (OTHERS => (OTHERS => '0'));
+                stage1_in_keep <= (OTHERS => FALSE);
+                stage1_in_last <= '0';
                 FOR i IN 0 TO width - 1 LOOP
                     stage1_regs(i).data(width - 1
                         --DOWNTO stage1_regs(i).mask_end)
                         --Vivado 2016.4 doesn't realize mask_end is constant
                         DOWNTO i)
                         <= (OTHERS => (OTHERS => '0'));
-                    stage1_regs(i).valid <= (OTHERS => '0');
+                    stage1_regs(i).keep <= (OTHERS => '0');
                     stage1_regs(i).last <= '0';
+                    stage2_regs(i).data(width - 1
+                        --DOWNTO stage2_regs(i).mask_end)
+                        --Vivado 2016.4 doesn't realize mask_end is constant
+                        DOWNTO i)
+                        <= (OTHERS => (OTHERS => '0'));
+                    stage2_regs(i).keep <= (OTHERS => '0');
+                    stage2_regs(i).last <= '0';
+                    stage2_ovf_regs(i).data(width - 1
+                        --DOWNTO stage2_regs(i).mask_end)
+                        --Vivado 2016.4 doesn't realize mask_end is constant
+                        DOWNTO i)
+                        <= (OTHERS => (OTHERS => '0'));
+                    stage2_ovf_regs(i).keep <= (OTHERS => '0');
+                    stage2_ovf_regs(i).last <= '0';
                 END LOOP;
             ELSE
-                -- expand possibilities stage
+                -- Populate intermediate data fanout
                 FOR i IN 0 TO width - 1 LOOP
-                    z := 0;
-                    stage1_regs(i).valid <= (OTHERS => '0');
+                    z := (OTHERS => '0');
+                    stage1_regs(i).keep <= (OTHERS => '0');
                     --FOR j IN stage1_regs(i).mask_end TO width - 1 LOOP --
                     --Vivado 2016.4 doesn't realize mask_end is constant
                     FOR j IN i TO width - 1 LOOP
                         FOR k IN INTEGER RANGE 1 TO in_data_sig'length LOOP
                             stage1_regs(i).data(j) <= in_data_sig(k - 1);
-                            IF in_valid_sig(k - 1) AND k > z THEN
-                                stage1_regs(i).valid(j) <= '1';
-                                z := k;
+                            IF in_keep_sig(k - 1) AND k > TO_INTEGER(z) THEN
+                                stage1_regs(i).keep(j) <= '1';
+                                z := TO_UNSIGNED(k, z'length);
                                 EXIT;
                             END IF;
                         END LOOP;
                     END LOOP;
                     stage1_regs(i).last <= In_last;
                 END LOOP;
+                stage1_in_data <= in_data_sig;
+                stage1_in_keep <= in_keep_sig;
+                stage1_in_last <= In_last;
 
-                -- pre-output stage
-                IF all_true(out_valid_reg) OR out_last_reg = '1' THEN
-                    out_data_reg <= stage1_regs(0).data;
-                    out_valid_reg <= stage1_regs(0).valid;
-                    out_last_reg <= stage1_regs(0).last;
+                stage2_regs <= stage1_regs;
+                -- Populate overflow possibilities (data only)
+                FOR i IN 0 TO width - 1 LOOP
+                    stage2_ovf_regs(i).keep <= (OTHERS => '0');
+                    --stage2_ovf_regs(i).last <= stage1_in_last;
+                    stage2_ovf_regs(i).last <= '0';
+                    kept_byte_n := 0;
+                    FOR j IN 0 TO width - 1 LOOP
+                        IF stage1_in_keep(j) THEN
+                            -- width - i is the number of the first byte that
+                            -- register i cannot hold. i is the number of initial
+                            -- used bytes.
+                            IF kept_byte_n >= (width - i) THEN
+                                stage2_ovf_regs(i).data(kept_byte_n
+                                    - (width - i)) <= stage1_in_data(j);
+                                stage2_ovf_regs(i).keep(kept_byte_n
+                                    - (width - i)) <= '1';
+                                stage2_ovf_regs(i).last <= stage1_in_last;
+                            END IF;
+                            kept_byte_n := kept_byte_n + 1;
+                        END IF;
+                    END LOOP;
+                END LOOP;
+
+                -- Pre-output stage. Merge new data with the output register
+                -- depending on keeps and overflows.
+                --
+                -- TODO Cleanup this stage, it's a bit sloppy.
+                out_reg_var := out_reg;
+                -- Change output if last or full
+                IF all_true(out_reg_var.keep) OR out_reg_var.last = '1' THEN
+                    n := n_valid(out_ovf_reg.keep);
+                    IF n > 0 THEN
+                        IF out_ovf_reg.last = '1' THEN
+                            out_reg_var := out_ovf_reg;
+                            out_ovf_reg <= stage2_regs(0);
+                        ELSE
+                            out_reg_var := combine_aligned(
+                                out_ovf_reg, stage2_regs(n));
+                            out_ovf_reg <= stage2_ovf_regs(n);
+                            -- last set in an overflow reg also indicates that
+                            -- there was overflow
+                            IF stage2_ovf_regs(n).last = '1' THEN
+                                out_reg_var.last := '0';
+                            END IF;
+                        END IF;
+                    ELSE
+                        out_reg_var := stage2_regs(0);
+                        out_ovf_reg.keep <= (OTHERS => '0');
+                        out_ovf_reg.last <= '0';
+                    END IF;
                 ELSE
-                    n := n_valid(out_valid_reg);
-                    out_data_reg <=
-                        combine(out_valid_reg, out_data_reg, stage1_regs(n));
-                    out_valid_reg <= stage1_regs(n).valid OR out_valid_reg;
-                    out_last_reg <= stage1_regs(n).last;
+                    -- TODO; Recrod the reasoning for why this doesn't happen
+                    --n := n_valid(out_ovf_reg.keep);
+                    --IF n > 0 THEN
+                    --    REPORT "this shouldn't happen";
+                    --    out_reg_var :=
+                    --        combine_aligned(out_ovf_reg, stage2_regs(n));
+                    --    out_ovf_reg <= stage2_ovf_regs(n);
+                    --    IF stage2_ovf_regs(n).last = '1' THEN
+                    --        out_reg_var.last := '0';
+                    --    END IF;
+                    --ELSE
+                        n := n_valid(out_reg_var.keep);
+                        IF n > 0 THEN
+                            out_reg_var :=
+                                combine_aligned(out_reg, stage2_regs(n));
+                            out_ovf_reg <= stage2_ovf_regs(n);
+                            IF stage2_ovf_regs(n).last = '1' THEN
+                                out_reg_var.last := '0';
+                            END IF;
+                        ELSE
+                            out_reg_var := stage2_regs(n);
+                            out_ovf_reg.keep <= (OTHERS => '0');
+                            out_ovf_reg.last <= '0';
+                        END IF;
+                    --END IF;
                 END IF;
+                out_reg <= out_reg_var;
 
                 -- output stage
-                ext_out_data_reg <= out_data_reg;
-                IF all_true(out_valid_reg) OR out_last_reg = '1' THEN
-                    ext_out_valid_reg <= out_valid_reg;
-                    ext_out_last_reg <= out_last_reg;
+                ext_out_reg.data <= out_reg.data;
+                IF all_true(out_reg.keep) OR out_reg.last = '1' THEN
+                    ext_out_reg.keep <= out_reg.keep;
+                    ext_out_reg_valid <= '1';
+                    ext_out_reg.last <= out_reg.last;
                 ELSE
-                    ext_out_valid_reg <= (OTHERS => '0');
-                    ext_out_last_reg <= out_last_reg;
+                    ext_out_reg.keep <= (OTHERS => '0');
+                    ext_out_reg_valid <= '0';
+                    ext_out_reg.last <= out_reg.last;
                 END IF;
             END IF;
         END IF;

@@ -106,11 +106,13 @@ ARCHITECTURE normal OF udp_tx IS
             Clk : IN STD_LOGIC;
             Rstn : IN STD_LOGIC;
             In_data : IN STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
-            In_valid : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            In_keep : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            In_valid : IN STD_LOGIC;
             In_last : IN STD_LOGIC;
             In_ready : OUT STD_LOGIC;
             Out_data : OUT STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
-            Out_valid : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            Out_keep : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+            Out_valid : OUT STD_LOGIC;
             Out_last : OUT STD_LOGIC;
             Out_ready : IN STD_LOGIC
         );
@@ -322,11 +324,13 @@ BEGIN
             Clk => Clk,
             Rstn => rstn,
             In_data => Data_in,
-            In_valid => Data_in_valid,
+            In_keep => Data_in_valid,
+            In_valid => '1',
             In_last => Data_in_end,
             In_ready => OPEN,
             Out_data => packed_data_in_sig,
-            Out_valid => packed_data_in_valid,
+            Out_keep => packed_data_in_valid,
+            Out_valid => OPEN,
             Out_last => packed_data_in_end,
             Out_ready => '1'
         );
@@ -792,11 +796,13 @@ BEGIN
             Clk => Clk,
             Rstn => rstn,
             In_data => p4_data_out_sig,
-            In_valid => p4_data_out_valid_sig,
+            In_keep => p4_data_out_valid_sig,
+            In_valid => '1',
             In_last => p4_data_out_end,
             In_ready => OPEN,
             Out_data => p5_data_out_sig,
-            Out_valid => p5_data_out_valid_sig,
+            Out_keep => p5_data_out_valid_sig,
+            Out_valid => OPEN,
             Out_last => p5_data_out_end,
             Out_ready => '1'
         );
