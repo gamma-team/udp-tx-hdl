@@ -945,7 +945,7 @@ BEGIN
                         out_valid_reg(0) <= '1';
                         out_data_sent <= FALSE;
                         out_data_count := (OTHERS => '0');
-                        IF UNSIGNED(fifo_q_udp_len) > 8 THEN
+                        IF UNSIGNED(fifo_q_udp_len) > width THEN
                             fifo_buffer_read <= '1';
                         ELSE
                             out_end_reg <= '1';
@@ -953,7 +953,7 @@ BEGIN
                     -- TODO: fix one cycle of extra latency between header and
                     -- first data output
                     WHEN S_OUTPUT_DATA0 =>
-                        IF UNSIGNED(fifo_q_udp_len) > 16 THEN
+                        IF UNSIGNED(fifo_q_udp_len) > width * 2 THEN
                             fifo_buffer_read <= '1';
                         END IF;
                     WHEN S_OUTPUT_DATA1 =>
@@ -963,8 +963,9 @@ BEGIN
                         out_data_count := out_data_count + width;
                         -- only continue reading from the fifo if more data is
                         -- left TODO: verify
-                        IF UNSIGNED(fifo_q_udp_len) > 16 THEN
-                            IF out_data_count < UNSIGNED(fifo_q_udp_len) - 16 THEN
+                        IF UNSIGNED(fifo_q_udp_len) > width * 2 THEN
+                            IF out_data_count < UNSIGNED(fifo_q_udp_len)
+                                    - width * 2 THEN
                                 fifo_buffer_read <= '1';
                             END IF;
                         END IF;
