@@ -972,8 +972,11 @@ BEGIN
                         out_valid_reg <= (OTHERS => '1');
                         IF fifo_buffer_q_end = '1' THEN
                             out_end_reg <= '1';
-                            out_valid_reg <= n_to_valid(
-                                TO_INTEGER(UNSIGNED(fifo_q_udp_len)) MOD 8);
+                            IF (UNSIGNED(fifo_q_udp_len) MOD width) /= 0 THEN
+                                out_valid_reg <= n_to_valid(
+                                    TO_INTEGER(UNSIGNED(fifo_q_udp_len))
+                                    MOD width);
+                            END IF;
                             out_data_sent <= TRUE;
                         END IF;
                         -- FIXME: Until the state machine is refined, do this
