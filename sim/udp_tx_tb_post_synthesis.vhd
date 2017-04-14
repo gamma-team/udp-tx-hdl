@@ -1,3 +1,23 @@
+----------------------------------------------------------------------------------
+-- Company: University of Pittsburgh
+-- Engineer: Mohammed Aloqayli
+-- 
+-- Create Date: 04/14/2017 02:02:00 AM
+-- Design Name: Post-Synthesis UDP Transmitter Test Bench
+-- Module Name: UDP_TX_TB_POST_SYNTHESIS - Functional and Timing
+-- Project Name: ECE-2140 Team Gamma
+-- Target Devices: Zync-7000
+-- Tool Versions: 
+-- Description: Test Bench for the UDP Transmitter module of the UDP offload engine
+-- 
+-- Dependencies: 
+-- 
+-- Revision:
+-- Revision 0.01 - File Created
+-- Additional Comments:
+-- 
+----------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 --use ieee.numeric_std.all;
@@ -15,9 +35,7 @@ end udp_tx_tb_post_synthesis;
 architecture Behavioral of udp_tx_tb_post_synthesis is
 
 COMPONENT udp_tx
---    GENERIC (
---        width : POSITIVE := 8
---    );
+
 PORT (
 
     Clk : IN STD_LOGIC;
@@ -38,7 +56,7 @@ PORT (
 );
 END COMPONENT;
 
-file In_file : text open read_mode is "even-length.txt";-- Change the file name
+file In_file : text open read_mode is "consecutive-packets.txt";-- Change the file name
 file Out_file : text open write_mode is "output.txt";
 
 --Clock and Reset signals
@@ -61,6 +79,8 @@ signal Data_out_err : STD_LOGIC;
 
 signal TB_Completed: STD_LOGIC:= '0';
 signal Data_to_file: STD_LOGIC:= '0';
+signal Num_of_pckts : POSITIVE := 3;
+signal Count : INTEGER := 0;
 
 begin
 
@@ -171,6 +191,10 @@ begin
     end if;
     
     if (Data_out_end = '1') then
+        Count <= Count + 1;
+    end if;
+    
+    if Num_of_pckts = Count then
         writeline(Out_file, Buff_out);
         Data_to_file <= '0';
         file_close(Out_file);
