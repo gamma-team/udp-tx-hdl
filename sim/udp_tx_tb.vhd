@@ -1,3 +1,23 @@
+----------------------------------------------------------------------------------
+-- Company: University of Pittsburgh
+-- Engineer: Mohammed Aloqayli
+-- 
+-- Create Date: 04/14/2017 02:02:00 AM
+-- Design Name: UDP Transmitter Test Bench
+-- Module Name: UDP_TX_TB - Behavioral
+-- Project Name: ECE-2140 Team Gamma
+-- Target Devices: Zync-7000
+-- Tool Versions: 
+-- Description: Test Bench for the UDP Transmitter module of the UDP offload engine
+-- 
+-- Dependencies: 
+-- 
+-- Revision:
+-- Revision 0.01 - File Created
+-- Additional Comments:
+-- 
+----------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 --use ieee.numeric_std.all;
@@ -23,13 +43,13 @@ PORT (
     Clk : IN STD_LOGIC;
     Rst : IN STD_LOGIC;
 		
-    Data_in : IN STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
+    Data_in : IN STD_LOGIC_VECTOR(width*8 - 1 DOWNTO 0);
     Data_in_valid : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
     Data_in_start : IN STD_LOGIC;
     Data_in_end : IN STD_LOGIC;
     Data_in_err : IN STD_LOGIC;
 
-    Data_out : OUT STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
+    Data_out : OUT STD_LOGIC_VECTOR(width*8 - 1 DOWNTO 0);
     Data_out_valid : OUT STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
     Data_out_start : OUT STD_LOGIC;
     Data_out_end : OUT STD_LOGIC;
@@ -38,8 +58,8 @@ PORT (
 );
 END COMPONENT;
 
-file In_file : text open read_mode is "C:\tutorials\udp_tx\input.txt";-- Change the file name
-file Out_file : text open write_mode is "C:\tutorials\udp_tx\output.txt";-- Change the file name
+file In_file : text open read_mode is "max-length.txt";-- Change the file name
+file Out_file : text open write_mode is "output.txt";
 
 --Clock and Reset signals
 signal Clk: STD_LOGIC := '0';
@@ -61,6 +81,8 @@ signal Data_out_err : STD_LOGIC;
 
 signal TB_Completed: STD_LOGIC:= '0';
 signal Data_to_file: STD_LOGIC:= '0';
+signal Num_of_pckts : POSITIVE := 1;
+signal Count : INTEGER := 0;
 
 begin
 
@@ -171,6 +193,10 @@ begin
     end if;
     
     if (Data_out_end = '1') then
+        Count <= Count + 1;
+    end if;
+    
+    if Num_of_pckts = Count then
         writeline(Out_file, Buff_out);
         Data_to_file <= '0';
         file_close(Out_file);
