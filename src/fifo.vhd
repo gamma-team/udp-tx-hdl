@@ -1,8 +1,8 @@
 -- Simple synchronous FIFO
 --
--- TODO: Needs testbenching, specifically for pointer wraparound.
+-- TODO: Needs more testbenching, specifically for pointer wraparound.
 --
--- Copyright 2017 Patrick Gauvin
+-- Copyright 2017 Patrick Gauvin. All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions are met:
@@ -43,6 +43,7 @@ ENTITY fifo IS
     PORT (
         Clk : IN STD_LOGIC;
         Rst : IN STD_LOGIC;
+        Ena : IN STD_LOGIC;
         Read : IN STD_LOGIC;
         Write : IN STD_LOGIC;
         D : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
@@ -75,8 +76,10 @@ BEGIN
     PROCESS(Clk)
     BEGIN
         IF rising_edge(Clk) THEN
-            IF mem_we = '1' THEN
-                mem(TO_INTEGER(mem_wr_ptr)) <= mem_d;
+            IF Ena = '1' THEN
+                IF mem_we = '1' THEN
+                    mem(TO_INTEGER(mem_wr_ptr)) <= mem_d;
+                END IF;
             END IF;
         END IF;
     END PROCESS;
@@ -93,7 +96,7 @@ BEGIN
                 mem_we <= '0';
                 reg_full <= '0';
                 reg_empty <= '1';
-            ELSE
+            ELSIF Ena = '1' THEN
                 mem_wr_ptr_var := mem_wr_ptr;
                 mem_rd_ptr_var := mem_rd_ptr;
                 mem_we <= '0';
