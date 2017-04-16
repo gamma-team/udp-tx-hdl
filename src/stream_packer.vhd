@@ -131,11 +131,6 @@ BEGIN
             FOR i IN v'range LOOP
                 b := b OR v(i);
             END LOOP;
-            IF b THEN
-                report "not all false";
-                ELSE
-                report "all false";
-            END IF;
             RETURN b = FALSE;
         END FUNCTION;
 
