@@ -1,10 +1,17 @@
 -- UDP streaming transmitter
 --
--- TODO: Add support for the Data_in_err
--- TODO: Error handling
--- Note: By design, the FIFOs should never fill up
+-- TODO: Finer-grained pushback. Right now the entire unit is disabled, but
+-- the input and output pipelines could be enabled independently.
+-- TODO: Add pushback based on an almost full flag on the header fifo
+-- TODO: Add proper support for the Data_in_err/Data_out_err
+-- TODO: Overflow detection if the UDP maximum length is exceeded.
 --
--- Copyright 2017 Patrick Gauvin
+-- Notes:
+-- - By design, the FIFOs should never fill up except for in a pathological
+--   case where the input stream has no gaps or nulls for a quite an extended
+--   period of time, such that one or both of the internal FIFOs overflow.
+--
+-- Copyright 2017 Patrick Gauvin. All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions are met:
@@ -54,12 +61,15 @@ ENTITY udp_tx IS
         Data_in : IN STD_LOGIC_VECTOR(width * 8 - 1 DOWNTO 0);
         -- Assertion indicates which Data_in bytes are valid.
         Data_in_valid : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
+        -- Need the direct valid from the AXI stream to avoid problems
+        Data_in_axi_valid : IN STD_LOGIC;
         -- Asserted when the first data is available on Data_in
         Data_in_start : IN STD_LOGIC;
         -- Asserted when the last valid data is available on Data_in.
         Data_in_end : IN STD_LOGIC;
         -- Indicate that there has been an error in the current transfer.
         Data_in_err : IN STD_LOGIC;
+        Data_in_ready : OUT STD_LOGIC;
 
         -- UDP datagram output bus to the IP layer.
         -- Byte offsets (all integer types are big endian):
@@ -76,7 +86,8 @@ ENTITY udp_tx IS
         Data_out_end : OUT STD_LOGIC;
         -- Indicate that there has been an error in the current datagram.
         -- Data_out should be ignored until the next Data_out_start assertion.
-        Data_out_err : OUT STD_LOGIC
+        Data_out_err : OUT STD_LOGIC;
+        Data_out_ready : IN STD_LOGIC
     );
 END ENTITY;
 
@@ -89,6 +100,7 @@ ARCHITECTURE normal OF udp_tx IS
         PORT (
             Clk : IN STD_LOGIC;
             Rst : IN STD_LOGIC;
+            Ena : IN STD_LOGIC;
             Read : IN STD_LOGIC;
             Write : IN STD_LOGIC;
             D : IN STD_LOGIC_VECTOR(width - 1 DOWNTO 0);
@@ -119,8 +131,8 @@ ARCHITECTURE normal OF udp_tx IS
     END COMPONENT;
 
     -- 17 bit counters allow for the extra header information (not UDP header
-    -- information) in the data streams. UDP datagrams are 65536 bytes,
-    -- maximum.
+    -- information) in the data streams. UDP datagrams are a maximum of 65535
+    -- bytes long.
     CONSTANT COUNTER_WIDTH : NATURAL := 17;
     CONSTANT DATA_IN_OFF_IP_SRC : NATURAL := 0;
     CONSTANT DATA_IN_OFF_IP_DST : NATURAL := DATA_IN_OFF_IP_SRC + 4;
@@ -140,6 +152,8 @@ ARCHITECTURE normal OF udp_tx IS
     CONSTANT DATA_OUT_OFF_UDP_PAYLOAD : NATURAL := DATA_OUT_OFF_UDP_CHK + 2;
     CONSTANT FIFO_BUFFER_DEPTH : NATURAL := 65536 / (width * 8);
     CONSTANT UDP_PROTO : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"11";
+    CONSTANT NO_VALID_DATA : STD_LOGIC_VECTOR(width - 1 DOWNTO 0)
+        := (OTHERS => '0');
 
     TYPE DATA_BUS IS ARRAY (width - 1 DOWNTO 0)
         OF STD_LOGIC_VECTOR(7 DOWNTO 0);
@@ -309,6 +323,8 @@ ARCHITECTURE normal OF udp_tx IS
     SIGNAL packed_data_in_valid
         : STD_LOGIC_VECTOR(Data_in_valid'length - 1 DOWNTO 0);
     SIGNAL packed_data_in_end : STD_LOGIC;
+
+    SIGNAL flow_enable : STD_LOGIC;
 BEGIN
     rstn <= NOT Rst;
 
@@ -325,15 +341,18 @@ BEGIN
             Rstn => rstn,
             In_data => Data_in,
             In_keep => Data_in_valid,
-            In_valid => '1',
+            In_valid => Data_in_axi_valid,
             In_last => Data_in_end,
-            In_ready => OPEN,
+            In_ready => Data_in_ready,
             Out_data => packed_data_in_sig,
             Out_keep => packed_data_in_valid,
             Out_valid => OPEN,
             Out_last => packed_data_in_end,
-            Out_ready => '1'
+            Out_ready => flow_enable
         );
+
+    flow_enable <= '1' WHEN out_valid_reg = NO_VALID_DATA
+        OR Data_out_ready = '1' ELSE '0';
 
     -- So that the main data buffer can be fixed length, data must be packed
     -- before being placed into it. Otherwise the buffer needs to be expanded
@@ -494,7 +513,7 @@ BEGIN
                 p6_data_out_err <= '0';
                 p6_fifo_buffer_we <= '0';
                 p6_started <= FALSE;
-            ELSE
+            ELSIF flow_enable = '1' THEN
                 --
                 -- Stage 0: Byte decoding
                 --
@@ -532,7 +551,7 @@ BEGIN
                         p0_addr_dst(7 DOWNTO 0) <= packed_data_in(7);
                         p0_addr_dst_valid <= true;
                         p0_data_in_valid <= (OTHERS => '0');
-                    ELSE
+                    ELSIF NOT p0_hdr_done THEN
                         p0_udp_port_src(15 DOWNTO 8) <= packed_data_in(0);
                         p0_udp_port_src(7 DOWNTO 0) <= packed_data_in(1);
                         p0_udp_port_src_valid <= true;
@@ -799,12 +818,13 @@ BEGIN
             In_keep => p4_data_out_valid_sig,
             In_valid => '1',
             In_last => p4_data_out_end,
+            -- Will not pushback unless its output pushes back
             In_ready => OPEN,
             Out_data => p5_data_out_sig,
             Out_keep => p5_data_out_valid_sig,
             Out_valid => OPEN,
             Out_last => p5_data_out_end,
-            Out_ready => '1'
+            Out_ready => flow_enable
         );
 
     -- Buffer FIFO, stores data while waiting for header calculations
@@ -823,6 +843,7 @@ BEGIN
         PORT MAP (
             Clk => Clk,
             Rst => Rst,
+            Ena => flow_enable,
             Read => fifo_buffer_read,
             Write => fifo_buffer_write,
             D => fifo_buffer_d,
@@ -850,6 +871,7 @@ BEGIN
         PORT MAP (
             Clk => Clk,
             Rst => Rst,
+            Ena => flow_enable,
             Read => fifo_read,
             Write => fifo_write,
             D => fifo_d,
@@ -907,7 +929,7 @@ BEGIN
                 out_data_count := (OTHERS => '0');
                 out_data_sent <= FALSE;
                 fifo_buffer_read <= '0';
-            ELSE
+            ELSIF flow_enable = '1' THEN
                 out_valid_reg <= (OTHERS => '0');
                 out_start_reg <= '0';
                 out_err_reg <= '0';
@@ -1001,7 +1023,7 @@ BEGIN
             IF Rst = '1' THEN
                 state <= S_WAIT_HDR;
                 fifo_read <= '0';
-            ELSE
+            ELSIF flow_enable = '1' THEN
                 CASE state IS
                     WHEN S_WAIT_HDR =>
                         IF fifo_empty /= '1' THEN
