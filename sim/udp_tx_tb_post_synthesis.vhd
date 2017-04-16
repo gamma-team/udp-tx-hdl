@@ -43,20 +43,22 @@ PORT (
 		
     Data_in : IN STD_LOGIC_VECTOR(63 DOWNTO 0);
     Data_in_valid : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
+    Data_in_axi_valid : IN STD_LOGIC;
     Data_in_start : IN STD_LOGIC;
     Data_in_end : IN STD_LOGIC;
     Data_in_err : IN STD_LOGIC;
+    Data_in_ready : OUT STD_LOGIC;
 
     Data_out : OUT STD_LOGIC_VECTOR(63 DOWNTO 0);
     Data_out_valid : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
     Data_out_start : OUT STD_LOGIC;
     Data_out_end : OUT STD_LOGIC;
-    Data_out_err : OUT STD_LOGIC
-
+    Data_out_err : OUT STD_LOGIC;
+    Data_out_ready : IN STD_LOGIC
 );
 END COMPONENT;
 
-file In_file : text open read_mode is "consecutive-packets.txt";-- Change the file name
+file In_file : text open read_mode is "all-tests.txt";-- Change the file name
 file Out_file : text open write_mode is "output.txt";
 
 --Clock and Reset signals
@@ -66,9 +68,11 @@ signal Rst: STD_LOGIC := '0';
 --Inputs signals
 signal Data_in : STD_LOGIC_VECTOR(TB_width * 8 - 1 DOWNTO 0);
 signal Data_in_valid : STD_LOGIC_VECTOR(TB_width - 1 DOWNTO 0);
+signal Data_in_axi_valid : STD_LOGIC;
 signal Data_in_start : STD_LOGIC;
 signal Data_in_end : STD_LOGIC;
 signal Data_in_err : STD_LOGIC;
+signal Data_in_ready : STD_LOGIC;
 
 --Outputs signals
 signal Data_out : STD_LOGIC_VECTOR(TB_width * 8 - 1 DOWNTO 0);
@@ -76,10 +80,10 @@ signal Data_out_valid : STD_LOGIC_VECTOR(TB_width - 1 DOWNTO 0);
 signal Data_out_start : STD_LOGIC;
 signal Data_out_end : STD_LOGIC;
 signal Data_out_err : STD_LOGIC;
+signal Data_out_ready : STD_LOGIC;
 
-signal TB_Completed: STD_LOGIC:= '0';
 signal Data_to_file: STD_LOGIC:= '0';
-signal Num_of_pckts : POSITIVE := 3;
+signal Num_of_pckts : POSITIVE := 8;
 signal Count : INTEGER := 0;
 
 begin
@@ -90,15 +94,18 @@ DUT: udp_tx port map (
 	
     Data_in => Data_in,
     Data_in_valid => Data_in_valid,
+    Data_in_axi_valid => Data_in_axi_valid,
     Data_in_start => Data_in_start,
     Data_in_end => Data_in_end,
     Data_in_err => Data_in_err,
+    Data_in_ready => Data_in_ready,
 	
     Data_out => Data_out,
     Data_out_valid => Data_out_valid,
     Data_out_start => Data_out_start,
     Data_out_end => Data_out_end,
-    Data_out_err => Data_out_err
+    Data_out_err => Data_out_err,
+    Data_out_ready => Data_out_ready
 );
 
 
@@ -113,13 +120,16 @@ process
     
     Data_in <= (others => '0');
     Data_in_valid <= (others => '0');
+    Data_in_axi_valid <= '0';
     Data_in_start <= '0';
     Data_in_end <= '0';
     Data_in_err <= '0';
+    Data_out_ready <= '0';
     -- wait for reset process to finish
     wait for 100 ns;
     wait until falling_edge(clk);
-    
+    Data_out_ready <= '1';
+    Data_in_axi_valid <= '1';
     report "TB - Loadign Application messages from file...";
     while not endfile(In_file) loop
         readline(In_file, Buff_in);
@@ -141,7 +151,6 @@ process
     Data_in_valid <= (others => '0');
     file_close(In_file);
     report "TB - Application messages have been loaded successfully";
-    TB_Completed <= '1';
     wait;
 
 end process;    
